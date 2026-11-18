@@ -54,6 +54,10 @@ protected:
   // K_ -> Desired Stiffness of the coupling
   Matrix6d K_p_, K_i_, K_d_;
   Matrix6d N_p_, N_d_;
+  // Accumulated pose error for the integral term, and the anti-windup bound on
+  // the term it produces (in m/s and rad/s, i.e. the unit of the output).
+  Vector6d error_integral_;
+  double integral_limit_;
   // equilibrium position of the coupling spring
   Vector3d equilibrium_position_;
   // equilibrium orientation of the coupling spring
@@ -82,6 +86,17 @@ protected:
   double arm_acc_lower_limit_;
   double frequency;
   double eps_;
+
+  ////// TIMING
+  // Every derivative and integral in here uses measured elapsed time, not the
+  // nominal loop period: the control loop and the three input streams run at
+  // different rates (loop 250 Hz, ee_state 125 Hz, base ground truth 50 Hz), so
+  // loop_rate_.expectedCycleTime() is not the age of any of the signals.
+  ros::Time last_control_time_;
+  ros::Time last_base_state_time_;
+  // Longest gap still treated as continuous; a larger one means a stalled or
+  // restarted publisher, and the derivative is dropped instead of spiking.
+  double max_input_gap_;
 
   ////// STATE VARIABLES:
   // Arm state: position, orientation, and twist (in "ur5_arm_base_link")
@@ -120,7 +135,7 @@ protected:
   void wait_for_transformations();
 
   // Control
-  void compute_pid();
+  void compute_pid(double dt);
 
   // Callbacks
   void state_arm_callback(const nav_msgs::OdometryConstPtr msg);
@@ -148,7 +163,8 @@ public:
                 std::vector<double> workspace_limits,
                 double arm_max_vel,
                 double arm_acc_upper_limit,
-                double arm_acc_lower_limit);
+                double arm_acc_lower_limit,
+                double integral_limit);
   void run();
 };
 

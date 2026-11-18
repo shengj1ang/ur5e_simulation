@@ -12,8 +12,10 @@ PIDController::PIDController(ros::NodeHandle &n,
                              std::vector<double> workspace_limits,
                              double arm_max_vel,
                              double arm_acc_upper_limit,
-                             double arm_acc_lower_limit) : nh_(n), loop_rate_(frequency),
+                             double arm_acc_lower_limit,
+                             double integral_limit) : nh_(n), loop_rate_(frequency),
                                                            K_p_(K_p.data()), K_i_(K_i.data()), K_d_(K_d.data()), N_p_(N_p.data()), N_d_(N_d.data()),
+                                                           integral_limit_(integral_limit),
                                                            workspace_limits_(workspace_limits.data()),
                                                            arm_max_vel_(arm_max_vel),
                                                            arm_acc_upper_limit_(arm_acc_upper_limit),
@@ -46,9 +48,24 @@ PIDController::PIDController(ros::NodeHandle &n,
   // Init integrator
   arm_desired_twist_final_.setZero();
   last_arm_desired_twist_final_.setZero();
-  // last_arm_real_twist_.setZero();
   last_error_.setZero();
-  // total_error_.setZero();
+  error_integral_.setZero();
+  // Eigen members are not zero-initialised. These all feed the control law
+  // before their callbacks have fired for the first time (the feedforward pair
+  // especially: /base_pose_ground_truth may be late or absent), so leaving them
+  // uninitialised means commanding the arm from whatever was on the stack.
+  arm_real_twist_.setZero();
+  ee_map_real_twist_.setZero();
+  model_affect_ee_twist_.setZero();
+  last_model_effect_ee_twist_.setZero();
+  model_affect_ee_acc_.setZero();
+  model_real_.setZero();
+  base_real_twist_.setZero();
+  base_real_position_.setZero();
+  base_real_orientation_.setIdentity();
+  last_control_time_ = ros::Time(0);
+  last_base_state_time_ = ros::Time(0);
+  max_input_gap_ = 0.5;
   pid_flag_ = false;
   transformation = false;
   pid_ready_flag_ = false;
@@ -102,8 +119,13 @@ void PIDController::state_arm_callback(const nav_msgs::OdometryConstPtr msg)
       msg->pose.pose.orientation.z,
       msg->pose.pose.orientation.w;
 
-  // arm_real_twist_ << msg->twist.linear.x, msg->twist.linear.y, msg->twist.linear.z,
-  //                    msg->twist.angular.x, msg->twist.angular.y, msg->twist.angular.z;
+  // The Cartesian velocity controller publishes the measured end-effector twist
+  // in the same message (nav_msgs/Odometry, so twist.twist - the commented-out
+  // version of these lines read msg->twist.linear and could not compile). Using
+  // it is what lets the damping term be a real velocity instead of a difference
+  // of two consecutive pose errors.
+  arm_real_twist_ << msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z,
+      msg->twist.twist.angular.x, msg->twist.twist.angular.y, msg->twist.twist.angular.z;
 }
 
 void PIDController::base_state_callback(const nav_msgs::OdometryConstPtr msg)
@@ -117,15 +139,45 @@ void PIDController::base_state_callback(const nav_msgs::OdometryConstPtr msg)
 
   base_real_twist_ << msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z,
       msg->twist.twist.angular.x, msg->twist.twist.angular.y, msg->twist.twist.angular.z;
-  Vector3d arm_map_translation = base_real_orientation_.toRotationMatrix() * arm_real_position_ + base_real_position_;
+  // Rigid-body transport of the base motion to the end effector:
+  //     v_ee = v_base + omega_base x r,     r = p_ee - p_base
+  // r is the lever arm from the arm base to the end effector, so it is the
+  // end-effector position expressed in base_link (which is what ee_state gives,
+  // the chain being base_link -> ee_link) rotated into the frame v_base and
+  // omega_base are expressed in - the world frame, for the p3d plugin.
+  //
+  // This used to add base_real_position_ as well, i.e. it crossed omega with the
+  // end effector's *world* position instead of the lever arm. That adds a
+  // spurious omega x p_base term, and p_base is metres away from the world
+  // origin once the gantry has travelled (y was ~5 m here), so the term grew to
+  // tens of m/s and swamped the whole command. The world position is still worth
+  // printing, but it is not the lever arm.
+  const Matrix3d rotation_base_world = base_real_orientation_.toRotationMatrix();
+  const Vector3d lever_arm = rotation_base_world * arm_real_position_;
+  const Vector3d arm_map_translation = lever_arm + base_real_position_;
   std::cout << "arm_map_translation" << arm_map_translation.transpose() << std::endl;
   Vector3d mid = base_real_twist_.bottomRows(3);
   model_affect_ee_twist_.bottomRows(3) = base_real_twist_.bottomRows(3);
-  model_affect_ee_twist_.topRows(3) = base_real_twist_.topRows(3) + mid.cross(arm_map_translation);
+  model_affect_ee_twist_.topRows(3) = base_real_twist_.topRows(3) + mid.cross(lever_arm);
 
-  ros::Duration duration = loop_rate_.expectedCycleTime();
-  double time_diff = duration.toSec();
-  model_affect_ee_acc_ = (model_affect_ee_twist_ - last_model_effect_ee_twist_) / time_diff;
+  // This callback fires once per /base_pose_ground_truth message (50 Hz from the
+  // p3d plugin), so the difference above spans one message interval - about
+  // 20 ms - not one control period. Dividing it by expectedCycleTime() (1 ms at
+  // the old frequency: 1000) inflated this feedforward acceleration by ~20x,
+  // which is why N_d had to be tuned down to 1e-5 to stay usable. Use the stamps.
+  const ros::Time stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
+  const double time_diff = (stamp - last_base_state_time_).toSec();
+  if (last_base_state_time_.isZero() || time_diff <= 0.0 || time_diff > max_input_gap_)
+  {
+    // First message, a restarted clock, or a stalled publisher: no usable
+    // interval, so report no acceleration rather than a spike.
+    model_affect_ee_acc_.setZero();
+  }
+  else
+  {
+    model_affect_ee_acc_ = (model_affect_ee_twist_ - last_model_effect_ee_twist_) / time_diff;
+  }
+  last_base_state_time_ = stamp;
   last_model_effect_ee_twist_ = model_affect_ee_twist_;
 
   geometry_msgs::Twist model_affect_ee_twist_msgs;
@@ -187,9 +239,34 @@ void PIDController::run()
   {
     if (pid_ready_flag_)
     {
+      // Measured loop period. ros::Time follows /clock here (use_sim_time is
+      // true in every bringup launch file), so this is simulated time and stays
+      // consistent with the message stamps even when Gazebo runs slower than
+      // real time.
+      const ros::Time now = ros::Time::now();
+      double dt = (now - last_control_time_).toSec();
+      if (last_control_time_.isZero() || dt < 0.0 || dt > max_input_gap_)
+      {
+        // First iteration after becoming ready, a clock that went backwards
+        // (Gazebo reset), or a gap long enough that the accumulated error says
+        // nothing about the present: start the integrator over.
+        dt = 0.0;
+        error_integral_.setZero();
+      }
+      else if (dt == 0.0)
+      {
+        // Two iterations inside the same /clock tick. No time has passed, so
+        // this cycle simply contributes nothing to the integral - it must not
+        // reset it. Resetting here is what kept the integral term pinned near
+        // zero: at 250 Hz against a 1 kHz clock this happens often enough that
+        // the integrator never accumulated more than a fraction of a second.
+        dt = 0.0;
+      }
+      last_control_time_ = now;
+
       // lowpass_filter();
       // Admittance Dynamics computation
-      compute_pid();
+      compute_pid(dt);
 
       // sum the vel from admittance to DS in this function
       // limit the the movement of the arm to the permitted workspace
@@ -201,6 +278,13 @@ void PIDController::run()
       // publishing visualization/debugging info
       //    publish_debuggings_signals();
     }
+    else
+    {
+      // Not tracking yet: keep the integrator empty and the clock unset so the
+      // first controlled cycle does not see a huge dt.
+      last_control_time_ = ros::Time(0);
+      error_integral_.setZero();
+    }
     ros::spinOnce();
     loop_rate_.sleep();
   }
@@ -209,12 +293,9 @@ void PIDController::run()
 ///////////////////////////////////////////////////////////////
 ///////////////////// PID Dynamics /////////////////////
 ///////////////////////////////////////////////////////////////
-void PIDController::compute_pid()
+void PIDController::compute_pid(double dt)
 {
-  Vector6d arm_desired_accelaration;
-  Vector6d calculated_arm_accelaration;
   Vector6d error;
-  Vector6d calculated_arm_twist;
 
   if (equilibrium_orientation_.coeffs().dot(arm_real_orientation_.coeffs()) < 0.0)
   {
@@ -231,7 +312,31 @@ void PIDController::compute_pid()
   error.bottomRows(3) << err_arm_des_orient.axis() * err_arm_des_orient.angle();
   error.topRows(3) = arm_real_position_ - equilibrium_position_;
 
-  calculated_arm_twist = error - last_error_;
+  // Integral term. Conditional integration: each component of the stored error
+  // integral is clamped so that the term it produces cannot exceed
+  // integral_limit_, which is in the unit of the output (m/s, rad/s). This
+  // assumes a diagonal K_i, which is how pid_params.yaml defines it.
+  error_integral_ += error * dt;
+  for (int i = 0; i < 6; ++i)
+  {
+    const double k_i = K_i_(i, i);
+    if (k_i > 0.0)
+    {
+      const double state_limit = integral_limit_ / k_i;
+      if (error_integral_(i) > state_limit)
+      {
+        error_integral_(i) = state_limit;
+      }
+      else if (error_integral_(i) < -state_limit)
+      {
+        error_integral_(i) = -state_limit;
+      }
+    }
+    else
+    {
+      error_integral_(i) = 0.0;
+    }
+  }
 
   // if (model_real_.norm() > 0.01)
   // {
@@ -240,13 +345,16 @@ void PIDController::compute_pid()
   // if (pid_flag_)
   // {
   //   error.setZero();
-  //   calculated_arm_twist.setZero();
   // }
   std::cout << "error: " << error.transpose() << std::endl;
 
-  arm_desired_twist_final_ = -K_p_ * error - K_d_ * calculated_arm_twist - N_p_ * model_affect_ee_twist_ - N_d_ * model_affect_ee_acc_;
-  ros::Duration duration = loop_rate_.expectedCycleTime();
-  double time_diff = duration.toSec();
+  // Damping now acts on the measured end-effector twist. It used to act on
+  // (error - last_error), an undivided difference of two pose errors sampled at
+  // the loop rate: with the loop at 1000 Hz and ee_state arriving at 125 Hz that
+  // difference was zero on seven cycles out of eight and a step on the eighth,
+  // and it carried an implicit factor of dt, so K_d silently changed meaning
+  // whenever the loop frequency changed.
+  arm_desired_twist_final_ = -K_p_ * error - K_i_ * error_integral_ - K_d_ * arm_real_twist_ - N_p_ * model_affect_ee_twist_ - N_d_ * model_affect_ee_acc_;
 
   last_error_ = error;
   last_arm_desired_twist_final_ = arm_desired_twist_final_;

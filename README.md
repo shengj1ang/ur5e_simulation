@@ -323,7 +323,11 @@ The same problem solved with k-means instead.
   ```
 
   Pass that only once the package is in your workspace. Without it the gantry
-  joints (`x_joint`, `y_joint`, `z_joint`, `r_joint`) simply have no controller.
+  joints (`x_joint`, `y_joint`, `z_joint`, `r_joint`) have no controller, and an
+  unactuated joint does not stay put: over a long session they creep (measured
+  `x_joint` +1.46 m, `y_joint` +4.95 m, `r_joint` -9.35 rad after a few hours),
+  which slowly carries the arm base with them. Anything that feeds the base
+  motion forward — `sim_pid_control`'s `N_p`/`N_d` terms — reacts to that creep.
 
 * **`No p gain specified for pid` spam on startup.** `gazebo_ros_control` prints
   this for every joint whose `/gazebo_ros_control/pid_gains/...` parameter is

@@ -307,7 +307,10 @@ roslaunch sim_admittance_control admittance_controller.launch
   ```
 
   只有当这个包确实在你的工作空间里时才需要加这个参数。不加的话，龙门那几个关节
-  （`x_joint`、`y_joint`、`z_joint`、`r_joint`）就只是没有控制器而已。
+  （`x_joint`、`y_joint`、`z_joint`、`r_joint`）就没有控制器——而没有控制器的关节
+  并不会待着不动：长时间开着会慢慢漂移（实测跑几个小时后 `x_joint` +1.46 m、
+  `y_joint` +4.95 m、`r_joint` -9.35 rad），机械臂基座就跟着被带走。任何把底座运动
+  作为前馈输入的东西（`sim_pid_control` 的 `N_p`/`N_d` 项）都会去响应这个漂移。
 
 * **启动时刷屏的 `No p gain specified for pid`。** 只要某个关节缺
   `/gazebo_ros_control/pid_gains/...` 参数，`gazebo_ros_control` 就会打这条。它不

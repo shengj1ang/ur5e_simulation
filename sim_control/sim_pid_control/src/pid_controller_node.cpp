@@ -22,6 +22,7 @@ int main(int argc, char **argv)
   double arm_acc_upper_limit;
   double arm_acc_lower_limit;
   double frequency;
+  double integral_limit;
 
   /// LOADING PARAMETERS FROM THE ROS SERVER
   if (!nh.getParam("topic_arm_state", topic_arm_state))
@@ -89,6 +90,16 @@ int main(int argc, char **argv)
     ROS_ERROR("Couldn't retrieve the max acceleration for the arm.");
     return -1;
   }
+  // Anti-windup bound on the integral term, in m/s and rad/s. Optional, so that
+  // a parameter file written before the integral term was wired up still loads.
+  nh.param<double>("integral_limit", integral_limit, 0.05);
+
+  if (frequency <= 0.0)
+  {
+    ROS_ERROR("frequency must be positive, got %f.", frequency);
+    return -1;
+  }
+  ROS_INFO("pid_controller: loop %.1f Hz, integral limit %.4f", frequency, integral_limit);
 
   // Constructing the controller
   PIDController pid_controller(
@@ -100,7 +111,8 @@ int main(int argc, char **argv)
       workspace_limits,
       arm_max_vel,
       arm_acc_upper_limit,
-      arm_acc_lower_limit);
+      arm_acc_lower_limit,
+      integral_limit);
 
   // Running the controller
   pid_controller.run();
