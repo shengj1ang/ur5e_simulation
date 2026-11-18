@@ -167,7 +167,7 @@ roslaunch sim_bringup with_admittance.launch
 
 # 只开一个世界，不加载机器人也不加载控制器——验证 GL / Gazebo 最快的办法
 roslaunch sim_bringup gazebo_test.launch
-roslaunch sim_bringup gazebo_test.launch world:=$(rospack find sim_gazebo)/world/puzzle.world
+roslaunch sim_bringup gazebo_test.launch world:=$(rospack find sim_gazebo)/world/example.world
 ```
 
 `with_moveit_new.launch` 起来之后的控制器：
@@ -318,6 +318,12 @@ roslaunch sim_admittance_control admittance_controller.launch
   `.gitattributes` 已经对除二进制资源以外的所有文件强制 `eol=lf`；如果你的 checkout
   比这个配置更早，用 `git rm --cached -r .` 再 `git reset --hard` 刷新一遍。第二阶段
   也会把它复制出去的那份里的 CR 清掉。
+
+* **`puzzle.world` 依赖一个本机可能没有的模型。** 它引用了
+  `model://puzzle_ball_joints`，这个模型不在仓库里，要从 Gazebo 的在线模型库下载；
+  拿不到的话，世界里除了地面什么都没有，日志里会出现
+  `Error Code 12 Msg: Unable to find uri[model://puzzle_ball_joints]`。
+  `one_brick.world`（水泥砖）和 `example.world`（只有地面）都是开箱能加载的。
 
 * **`/base_pose_ground_truth` 没有任何节点发布。** `general_arm_planning` 订阅它，
   是因为它原本写给一台带移动底盘的机器人。本模型是固定龙门，所以它用到的底盘位姿

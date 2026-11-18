@@ -177,7 +177,7 @@ roslaunch sim_bringup with_admittance.launch
 
 # just a world, no robot and no controllers - the quickest GL/Gazebo smoke test
 roslaunch sim_bringup gazebo_test.launch
-roslaunch sim_bringup gazebo_test.launch world:=$(rospack find sim_gazebo)/world/puzzle.world
+roslaunch sim_bringup gazebo_test.launch world:=$(rospack find sim_gazebo)/world/example.world
 ```
 
 Controllers after `with_moveit_new.launch`:
@@ -334,6 +334,13 @@ The same problem solved with k-means instead.
   `.gitattributes` forces `eol=lf` for everything but binary assets; if your
   checkout predates it, refresh it with `git rm --cached -r .` followed by
   `git reset --hard`. Phase 2 also strips CRs from the copy it builds.
+
+* **`puzzle.world` needs a model this machine may not have.** It references
+  `model://puzzle_ball_joints`, which is not in the repository and comes from
+  Gazebo's online model database; without it the world opens with nothing but the
+  ground plane and `Error Code 12 Msg: Unable to find uri[model://puzzle_ball_joints]`
+  in the log. `one_brick.world` (cinder block) and `example.world` (ground plane
+  only) both load as they are.
 
 * **`/base_pose_ground_truth` is never published.** `general_arm_planning`
   subscribes to it for the mobile base of the robot it was originally written for.
