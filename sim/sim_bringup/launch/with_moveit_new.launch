@@ -36,7 +36,12 @@
           -J wrist_3_joint 0" />
 
     <include file="$(find sim_moveit_config)/launch/sim_bringup_moveit.launch"/>
-    <include file="$(find machine_tool_control)/launch/machine_tool_control4sim.launch"/>
+    <!-- machine_tool_control does not ship with this repository. The include is
+         opt-in so that bringup works in a plain checkout; pass
+         use_machine_tool:=true once that package is in your workspace. -->
+    <arg name="use_machine_tool" default="false"/>
+    <include file="$(find machine_tool_control)/launch/machine_tool_control4sim.launch"
+             if="$(arg use_machine_tool)"/>
 
     <node name="rviz" pkg="rviz" type="rviz" args="-d $(find sim_description)/rviz/all.rviz" required="true" />
 
