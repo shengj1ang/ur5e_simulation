@@ -174,11 +174,11 @@ roslaunch sim_bringup with_moveit_new.launch
 
 # same, but spawns into example.world and loads the Cartesian velocity controller
 roslaunch sim_bringup with_admittance.launch
-```
 
-To check the GL stack alone, without this project, use
-`roslaunch gazebo_ros empty_world.launch`. (`sim_bringup gazebo_test.launch`
-looks like it would do that, but it is broken — see [§6](#6-known-issues).)
+# just a world, no robot and no controllers - the quickest GL/Gazebo smoke test
+roslaunch sim_bringup gazebo_test.launch
+roslaunch sim_bringup gazebo_test.launch world:=$(rospack find sim_gazebo)/world/puzzle.world
+```
 
 Controllers after `with_moveit_new.launch`:
 
@@ -214,9 +214,12 @@ What each one actually needs:
   `/object_visual_odometry` and a `mission_mode/mode_switch` service call. Nothing
   in this repository publishes that topic (it came from a vision node), so on its
   own the node moves to `1st_reco_start`, opens the gripper and then waits.
-* `general_arm_planning` subscribes to `/base_pose_ground_truth` and
-  `/sim_cartesian_velocity_controller/ee_state` — note the **non-`_sim`** name,
-  which is not the controller the simulation runs; see [§6](#6-known-issues).
+* `general_arm_planning` follows an equilibrium pose and switches between
+  `arm_joint_controller` and `sim_cartesian_velocity_controller_sim` itself. It
+  reads the arm state from `/sim_cartesian_velocity_controller_sim/ee_state`;
+  point it elsewhere (the real robot's controller has no `_sim` suffix) with the
+  `arm_state_topic` parameter. It also expects `/base_pose_ground_truth` from a
+  mobile base that is not part of this model, so the base pose stays at zero.
 * `twelve_monkeys` and `hex_love` are self-contained: they only publish a
   `nav_msgs/Path` and markers for RViz, so they need no controllers at all.
 
@@ -252,6 +255,10 @@ Two things to know:
   ```bash
   rosrun controller_manager controller_manager stop arm_joint_controller
   ```
+
+  `roslaunch sim_bringup init_pose_start_controllers.launch` does both steps for
+  you: it sets the arm to the pose in `sim_bringup/config/initial_pose.yaml` and
+  then switches from `arm_joint_controller` to the Cartesian controller.
 
 Topics:
 
@@ -328,25 +335,14 @@ The same problem solved with k-means instead.
   checkout predates it, refresh it with `git rm --cached -r .` followed by
   `git reset --hard`. Phase 2 also strips CRs from the copy it builds.
 
-* **`general_arm_planning` listens on the wrong end-effector topic.** It
-  subscribes to `/sim_cartesian_velocity_controller/ee_state`, while the
-  simulation runs `sim_cartesian_velocity_controller_sim` and therefore publishes
-  `/sim_cartesian_velocity_controller_sim/ee_state`. Remap it, or edit
-  `general_arm_planning.cpp`, if you want the node to see the arm state. It also
-  expects `/base_pose_ground_truth` from a mobile base that is not part of this
-  model.
+* **`/base_pose_ground_truth` is never published.** `general_arm_planning`
+  subscribes to it for the mobile base of the robot it was originally written for.
+  This model has a fixed gantry instead, so the base pose it uses stays at zero.
 
-* **`gazebo_test.launch` is broken.** It loads
-  `$(find sim_gazebo)/world/demo3.world`, and that world file is not in the
-  repository (`sim_gazebo/world/` has `one_brick`, `example` and `puzzle`). It also
-  never spawns the robot. Point it at an existing world, or use
-  `roslaunch gazebo_ros empty_world.launch` instead.
-
-* **`sim/sim_bringup/scripts/init_pose_start_controllers.py` is stale.** It
-  references the model name `raigor` and a controller named
-  `raigor_cartesian_velocity_controller_sim`; in this repository the model is `sim`
-  and the controller is `sim_cartesian_velocity_controller_sim`. That script, and
-  `init_pose_start_controllers.launch` with it, does not work unmodified.
+* **`init_pose_start_controllers.launch` takes the arm away from MoveIt.** That is
+  what it is for — it switches from `arm_joint_controller` to the Cartesian
+  velocity controller — but MoveIt execution stops working until you switch back
+  (`controller_manager start arm_joint_controller`).
 
 * **Parallel builds used to fail** with
   `mission_mode/mode_switch.h: No such file or directory`. The four executables in

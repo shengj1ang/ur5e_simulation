@@ -8,6 +8,7 @@
 #include <eigen3/Eigen/Core>
 #include <eigen3/Eigen/Geometry>
 #include <vector>
+#include <string>
 #include <std_msgs/Int8.h>
 #include <std_msgs/Float64.h>
 #include <std_msgs/Bool.h>
@@ -51,7 +52,17 @@ Manipulator::Manipulator()
 
     sub_base_odom_ = n_.subscribe("/base_pose_ground_truth", 1, &Manipulator::base_odom_callback, this, ros::TransportHints().tcpNoDelay());
 
-    sub_arm_state_ = n_.subscribe("/sim_cartesian_velocity_controller/ee_state", 1,
+    // Under Gazebo the controller that runs is sim_cartesian_velocity_controller_sim
+    // (see plan_mode()/custom_mode() below, which switch exactly that one), so its
+    // state topic carries the _sim suffix too. Subscribing to the hardware name
+    // meant this callback never fired in simulation. The parameter is there for
+    // the real robot, where the controller has no suffix:
+    //   <param name="arm_state_topic" value="/sim_cartesian_velocity_controller/ee_state"/>
+    std::string arm_state_topic;
+    n_.param<std::string>("arm_state_topic", arm_state_topic,
+                          "/sim_cartesian_velocity_controller_sim/ee_state");
+    ROS_INFO_STREAM("general_arm_planning: arm state topic = " << arm_state_topic);
+    sub_arm_state_ = n_.subscribe(arm_state_topic, 1,
                                   &Manipulator::state_arm_callback, this,
                                   ros::TransportHints().reliable().tcpNoDelay());
 

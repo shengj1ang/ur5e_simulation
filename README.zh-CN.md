@@ -164,11 +164,11 @@ roslaunch sim_bringup with_moveit_new.launch
 
 # 同上，但场景是 example.world，并且会加载笛卡尔速度控制器
 roslaunch sim_bringup with_admittance.launch
-```
 
-想单独验证 GL 环境（不牵扯本项目），用 `roslaunch gazebo_ros empty_world.launch`。
-（`sim_bringup gazebo_test.launch` 看起来是干这个用的，但它是坏的——见
-[§6](#6-已知问题)。）
+# 只开一个世界，不加载机器人也不加载控制器——验证 GL / Gazebo 最快的办法
+roslaunch sim_bringup gazebo_test.launch
+roslaunch sim_bringup gazebo_test.launch world:=$(rospack find sim_gazebo)/world/puzzle.world
+```
 
 `with_moveit_new.launch` 起来之后的控制器：
 
@@ -202,9 +202,11 @@ SRDF 里定义了 `manipulator` 和 `endeffector` 两个组，预设姿态有 `i
   流程，但抓取位姿来自 `/object_visual_odometry` 话题和一次
   `mission_mode/mode_switch` 服务调用。本仓库里没有任何东西发布那个话题（它原本来自
   一个视觉节点），所以单独跑它只会走到 `1st_reco_start`、把夹爪打开，然后一直等。
-* `general_arm_planning` 订阅 `/base_pose_ground_truth` 和
-  `/sim_cartesian_velocity_controller/ee_state`——注意是**不带 `_sim`** 的名字，而
-  仿真里跑的并不是这个控制器，见 [§6](#6-已知问题)。
+* `general_arm_planning` 跟随一个平衡点位姿，并且会自己在 `arm_joint_controller`
+  和 `sim_cartesian_velocity_controller_sim` 之间切换。它从
+  `/sim_cartesian_velocity_controller_sim/ee_state` 读臂的状态；要换成别的话题
+  （真机上的控制器没有 `_sim` 后缀），用 `arm_state_topic` 参数指定。它还需要
+  `/base_pose_ground_truth`，而这个模型里没有移动底盘，所以底盘位姿一直是零。
 * `twelve_monkeys` 和 `hex_love` 是自包含的：它们只往 RViz 发
   `nav_msgs/Path` 和 marker，完全不需要控制器。
 
@@ -238,6 +240,10 @@ roslaunch sim_admittance_control admittance_controller.launch
   ```bash
   rosrun controller_manager controller_manager stop arm_joint_controller
   ```
+
+  `roslaunch sim_bringup init_pose_start_controllers.launch` 会把这两步一起做掉：
+  先把臂摆到 `sim_bringup/config/initial_pose.yaml` 里的姿态，再从
+  `arm_joint_controller` 切到笛卡尔控制器。
 
 相关话题：
 
@@ -313,23 +319,13 @@ roslaunch sim_admittance_control admittance_controller.launch
   比这个配置更早，用 `git rm --cached -r .` 再 `git reset --hard` 刷新一遍。第二阶段
   也会把它复制出去的那份里的 CR 清掉。
 
-* **`general_arm_planning` 订阅的末端状态话题不对。** 它订阅的是
-  `/sim_cartesian_velocity_controller/ee_state`，而仿真里跑的是
-  `sim_cartesian_velocity_controller_sim`，发布的话题是
-  `/sim_cartesian_velocity_controller_sim/ee_state`。想让这个节点真的拿到臂的状态，
-  要么做 remap，要么改 `general_arm_planning.cpp`。另外它还要
-  `/base_pose_ground_truth`，而这个模型里并没有移动底盘。
+* **`/base_pose_ground_truth` 没有任何节点发布。** `general_arm_planning` 订阅它，
+  是因为它原本写给一台带移动底盘的机器人。本模型是固定龙门，所以它用到的底盘位姿
+  一直保持为零。
 
-* **`gazebo_test.launch` 是坏的。** 它加载的是
-  `$(find sim_gazebo)/world/demo3.world`，而这个世界文件不在仓库里
-  （`sim_gazebo/world/` 下只有 `one_brick`、`example`、`puzzle`），而且它也完全不
-  生成机器人。要用的话自己把它指向一个存在的世界文件，或者直接用
-  `roslaunch gazebo_ros empty_world.launch`。
-
-* **`sim/sim_bringup/scripts/init_pose_start_controllers.py` 已经过期。** 里面引用的
-  模型名是 `raigor`、控制器名是 `raigor_cartesian_velocity_controller_sim`；而本仓库
-  里模型叫 `sim`、控制器叫 `sim_cartesian_velocity_controller_sim`。所以这个脚本以及
-  `init_pose_start_controllers.launch` 不改是跑不通的。
+* **`init_pose_start_controllers.launch` 会把臂从 MoveIt 手里拿走。** 这正是它的用途
+  ——从 `arm_joint_controller` 切到笛卡尔速度控制器——但在你切回去之前
+  （`controller_manager start arm_joint_controller`），MoveIt 的执行功能是不可用的。
 
 * **并行编译以前会失败**，报
   `mission_mode/mode_switch.h: No such file or directory`。现在
