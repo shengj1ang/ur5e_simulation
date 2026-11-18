@@ -248,23 +248,31 @@ include_directories(
 # add_executable(test_tf src/test_tf.cpp )
 # target_link_libraries(test_tf ${catkin_LIBRARIES})
 
+# These nodes include mission_mode/mode_switch.h, generated from
+# mission_mode/srv/mode_switch.srv. ${catkin_EXPORTED_TARGETS} makes the message
+# generation run first; without it a parallel make (-jN) races and fails with
+# "mission_mode/mode_switch.h: No such file or directory".
 add_executable(
   general_arm_planning 
   src/general_arm_planning.cpp
   src/general_arm_planning_main.cpp)
 target_link_libraries(general_arm_planning ${catkin_LIBRARIES})
+add_dependencies(general_arm_planning ${catkin_EXPORTED_TARGETS})
 
 add_executable(
   x_arm_planning 
   src/x_arm_planning_main.cpp)
 target_link_libraries(x_arm_planning ${catkin_LIBRARIES})
+add_dependencies(x_arm_planning ${catkin_EXPORTED_TARGETS})
 
 add_executable(
   twelve_monkeys 
   src/twelve_monkeys.cpp)
 target_link_libraries(twelve_monkeys ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+add_dependencies(twelve_monkeys ${catkin_EXPORTED_TARGETS})
 
 add_executable(
   hex_love 
   src/hex_love.cpp)
 target_link_libraries(hex_love ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+add_dependencies(hex_love ${catkin_EXPORTED_TARGETS})
