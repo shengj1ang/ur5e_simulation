@@ -1,0 +1,21 @@
+# ---------------------------------------------------------------------------
+# Line-ending policy
+#
+# This repository is routinely checked out on Windows and used from Linux at
+# the same time (VMware/VirtualBox shared folder, WSL, network mount). A CRLF
+# working tree breaks on Linux in two ways: shell/python scripts fail with
+# "bad interpreter: ...^M" and catkin/xacro report confusing parse errors.
+# Forcing eol=lf keeps the working tree LF on every platform, regardless of
+# the user's core.autocrlf setting.
+# ---------------------------------------------------------------------------
+* text=auto eol=lf
+
+# Binary assets: never apply any conversion to these.
+*.stl  binary
+*.STL  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+
+# COLLADA meshes are XML documents, so they stay text (with LF).
+*.dae  text eol=lf
