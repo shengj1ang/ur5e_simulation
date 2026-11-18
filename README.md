@@ -159,6 +159,11 @@ A full log of phase 1 is kept in `/var/log/ur5e_apt_install.log`.
 
 Re-run phase 2 after editing the sources: it re-syncs and rebuilds incrementally.
 
+**Working on the code from here on:** [docs/WORKFLOW.md](docs/WORKFLOW.md) covers
+the host/VM split, which changes need a rebuild and which do not, recipes for the
+usual edits (gains, worlds, named poses, a new node), how to drive the robot by
+hand, and how to find out what went wrong.
+
 ---
 
 ## 4. Running things
