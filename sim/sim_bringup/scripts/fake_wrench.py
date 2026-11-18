@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
 import rospy
 import copy
@@ -42,7 +42,7 @@ def publisherCallback( msg ):
         fake_wrench.header.stamp = rospy.Time.now()
         wrench_pub.publish(fake_wrench)
     except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-        print "Coudn't find transforms!"
+        print("Coudn't find transforms!")
 
 def transformCallback( msg ):
     br = TransformBroadcaster()
