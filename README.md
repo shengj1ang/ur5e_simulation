@@ -400,9 +400,10 @@ feedback helps instead of fighting.
 **The model inertia term, as written, makes it worse**, and the reason is worth
 being precise about rather than tuning around:
 
-* The node estimates `a_ff` by backward-differencing the 50 Hz base twist
-  carried to the end effector. Differentiation amplifies noise already present
-  in the sampled velocity. If the velocity itself comes from position
+* The node estimates `a_ff` by backward-differencing the base twist carried to
+  the end effector, sampled at whatever `base_pose_update_rate` is - 50 Hz when
+  this was measured. Differentiation amplifies noise already present in the
+  sampled velocity. If the velocity itself comes from position
   differences, this chain takes a second difference. The installed Noetic
   p3d 2.9.3 publishes Gazebo's link velocity directly. Multiplying the
   acceleration estimate by Λ (5 to 9 kg) feeds its noise into the velocity
@@ -627,9 +628,50 @@ named poses in the SRDF, and well clear of the 0.05 at which `ik_sigma_min`
 begins to damp.
 
 The analytic acceleration bypasses p3d for this feedforward term. World-frame
-feedback still forms its pose error from the 50 Hz `/base_pose_ground_truth`
-stream, among its other inputs. The half-sample delay of that stream is about
-10.8° at 3 Hz and remains part of the loop's phase lag.
+feedback still forms its pose error from `/base_pose_ground_truth`, among its
+other inputs. That stream ran at 50 Hz for everything above, and its half-sample
+delay is about 10.8° at 3 Hz - the largest single term in the loop's phase lag.
+That turned out to matter more than anything else in this section.
+
+**Then the rate, the gains, and the question again.** Everything above was
+measured at the then-default 50 Hz base-state rate with the original Y-axis
+gains. Both have since changed, which re-opens the result. The
+[Chinese report](docs/inertial_feedforward_report.html) carries the full
+measurement and the per-segment data; the headline is that the model term was
+never the binding constraint.
+
+Raising `base_pose_update_rate` from 50 to 200 Hz, with nothing else touched,
+moved single-tone transmission at the `init` pose from 33.08 % to 15.75 % at
+3 Hz and from 62.73 % to 33.07 % at 5 Hz - paired improvements of 17.33
+[15.09, 19.57] and 29.67 [24.42, 34.91] points. Against the one-point-ish the
+dynamics model is worth, that is an order of magnitude more, bought by sampling
+the base faster rather than by modelling it better. 200 Hz is now the default in
+`with_moveit_new.launch`.
+
+At 200 Hz and the original gains the model term still could not be resolved:
+OFF − ON came out −0.33 [−1.57, 0.92] points at 3 Hz, −0.52 [−3.45, 2.41] at
+5 Hz, and +0.32 [−0.90, 1.53] on a 13-tone multisine. Retuning Y to `K_p` 12.0
+and `K_d` 0.35, from 7.7 and 0.10, then cut end-effector RMS by about a third at
+both test poses - 1.24 to 0.85 mm against a 20 mm command, a paired
+RMS-transmission improvement of 4.76 [2.99, 6.53] points at `init` and 5.51
+[3.64, 7.38] at the SRDF pickup pose.
+
+Only with those gains in place does the inertial branch separate from zero in a
+single design: at `init` with a 20 mm multisine, turning it on took RMS from
+0.82 to 0.76 mm, 0.70 [0.33, 1.06] points of RMS transmission. At 30 mm it is
++0.55 [−1.37, 2.48], still unresolved, and one of the six blocks got worse with
+it on. So the model earns its place behind a fast base signal and a tuned loop,
+not instead of them.
+
+Two side results are worth keeping. Admitting the wrench through the dynamic
+operational-space mapping rather than a static inertia makes no measurable
+difference at the tip - all three paired intervals span zero - but it does
+roughly halve the joint-level compensation asked for: 4.03 to 2.50 mrad peak at
+5 Hz with the base at 50 Hz, 4.34 to 2.65 at 200 Hz. And the feedforward is fed
+the *commanded* base acceleration, while the measured one runs about 15 % high
+with 11.8-12.7° of lag at 8 Hz, so at the top of the band the term
+under-compensates by a known amount. That is the next thing to fix if the band
+is to be widened.
 
 ### 4.5 Tuning
 
@@ -644,6 +686,15 @@ stream, among its other inputs. The half-sample delay of that stream is about
 | `sim_control/*/config/sim_vel_controller.yaml` | `ik_sigma_min`/`ik_lambda`/`max_joint_velocity`, `velocity_filter_cutoff`, and the dynamics controller's `sigma_min`/`pinv_rcond`/`include_tip_payload`/`gravity` |
 
 All gain matrices are 6×6, written out row-major as a flat list.
+
+Two knobs live in a launch file rather than a YAML. `base_pose_update_rate` on
+`with_moveit_new.launch` (default 200.0) sets how fast the `base_link` p3d
+plugin publishes `/base_pose_ground_truth`, which feeds both the world-frame
+pose error and the kinematic feedforward; it is a xacro argument, so it takes
+effect at spawn and changing it means restarting the bringup. Separately,
+`inertia_mapping_experiment` on `pid_controller.launch` (default false) exposes
+`/use_static_inertia_mapping`, a bool that switches the inertial feedforward
+between the dynamic mapping and a static inertia for paired comparisons.
 
 ---
 
@@ -711,8 +762,9 @@ The same problem solved with k-means instead.
 
 * **`/base_pose_ground_truth` moves, and the controllers' feedback does not see
   it.** `main.xacro` carries a second `libgazebo_ros_p3d.so` plugin on
-  `base_link`, so the topic is published at 50 Hz and carries the arm base's
-  pose and twist in `world`. Measured: the PID node's callback fires 1410 times
+  `base_link`, so the topic is published at `base_pose_update_rate` - 200 Hz by
+  default now, 50 Hz when the numbers below were measured - and carries the arm
+  base's pose and twist in `world`. Measured: the PID node's callback fires 1410 times
   in one run, with the base motion carried to the end effector coming out at
   about (0.22, 0.06, -0.07) mm/s - the unactuated gantry creeping, `z_joint`
   sinking from -0.0009 m to -0.0025 m over 38 s.
@@ -877,7 +929,8 @@ The same problem solved with k-means instead.
   the same rig, holding a setpoint: **0.090 mm of steady-state error before,
   0.01–0.04 mm after**, and before it was a fixed offset where after it is
   noise. 0.090 mm is also what the term predicts — `K_d` 0.1 against the
-  -0.0075 m/s artefact, divided by `K_p` 7.7, is 0.098 mm.
+  -0.0075 m/s artefact, divided by `K_p` 7.7, is 0.098 mm. Those are the z
+  gains, which the later Y-axis retune left alone.
 
   One caveat on the replacement. The position interface tracks its setpoint
   exactly, so in simulation the plant between command and position is close to

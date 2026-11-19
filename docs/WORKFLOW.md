@@ -166,6 +166,26 @@ rosparam get /K_p
 rosparam get /mass_arm
 ```
 
+### Change how fast the base state is published
+
+```bash
+roslaunch sim_bringup with_moveit_new.launch base_pose_update_rate:=50.0
+```
+
+| Argument | Default | What it does |
+|---|---|---|
+| `base_pose_update_rate` | 200.0 | How often the `base_link` p3d plugin publishes `/base_pose_ground_truth`, in Hz. It feeds the world-frame pose error and the kinematic feedforward, so it sets the half-sample delay in that path: about 2.7° at 3 Hz here, against 10.8° at 50 Hz. Raising it from 50 to 200 is what cut single-tone transmission from 33 % to 16 % at 3 Hz and from 63 % to 33 % at 5 Hz (README §4.4). It was 50.0 before. |
+| `gui` / `headless` | true / false | Overridable now; they used to be fixed `value=` and ignored whatever you passed. `gui:=false headless:=true` also drops RViz, through the derived `use_rviz`. |
+| `inertia_mapping_experiment` | false | On `pid_controller.launch`, not this one. Exposes `/use_static_inertia_mapping`, a bool that switches the inertial feedforward between the dynamic mapping and a static inertia, for paired comparisons. |
+
+`base_pose_update_rate` is a xacro argument, so it is baked in when the model is
+spawned: changing it means restarting the bringup, not just the controllers.
+Confirm what you actually got rather than assuming:
+
+```bash
+rostopic hz /base_pose_ground_truth
+```
+
 ### Change how the Cartesian IK behaves near a singularity
 
 `sim_control/sim_pid_control/config/sim_vel_controller.yaml` and the corresponding
