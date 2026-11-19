@@ -58,10 +58,23 @@ namespace controller_interface
  * file rather than from this source file.
  *
  * max_joint_velocity is a separate, unconditional backstop: whatever the
- * solver returns is scaled down uniformly if its norm exceeds it. With the
- * defaults above nothing reaches it (0.27 rad/s at the worst pose measured),
- * so it does not shape normal motion - it only bounds the damage if a pose or
- * a command is found that the damping does not cover.
+ * solver returns is scaled down uniformly if its norm exceeds it. It is the
+ * arm's own limit from the robot description, 3.14 rad/s, because a backstop
+ * set below the hardware's limit stops being a backstop and becomes the
+ * controller's bandwidth.
+ *
+ * It was 1.0, and that was measured doing two different things. At a
+ * singularity it does nothing: from the spawn pose the solver asks for 0.35
+ * rad/s at its worst, a third of even that cap, and a command five times
+ * harsher (0.10 m/s) still only gets 6 % through, because the damping
+ * saturates the solution first - identically at 1.0 and at 3.14, with the free
+ * gantry moving 0.02 mm either way. Tracking a base disturbance it was the
+ * binding constraint: holding the end effector still against a moving base
+ * costs about 4 rad/s of joint velocity per m/s at the 'init' pose, so at 3 Hz
+ * the correction asked for 1.46 rad/s, was scaled by 0.69, and the clipping
+ * cost 14.6 points of disturbance rejection (55.0 % to 69.6 %) and ten times
+ * the residual's waveform distortion. At 5 Hz it asked for 2.71 rad/s and the
+ * clipping cost 33.5 points.
  *
  * Verified in Gazebo, same 0.02 m/s command along x. From the spawn pose the
  * end effector now tracks at 0.0200 m/s while the gantry joints stay under
@@ -78,7 +91,7 @@ bool CartesianVelocityControllerBase<T>::init(T *robot, ros::NodeHandle &n)
 
   n.param("ik_sigma_min", ik_sigma_min_, 0.05);
   n.param("ik_lambda", ik_lambda_, 0.2);
-  n.param("max_joint_velocity", max_joint_velocity_, 1.0);
+  n.param("max_joint_velocity", max_joint_velocity_, 3.14);
   n.param("max_command_lead", max_command_lead_, 0.1);
   n.param("ff_gravity", ff_gravity_, 1.0);
   n.param("ff_coriolis", ff_coriolis_, 1.0);

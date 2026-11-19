@@ -25,10 +25,12 @@ sim_cartesian_velocity_controller:
   # singular value at which damping starts - see the comment on init() in
   # cartesian_velocity_controller.cpp for the measurements these come from.
   # max_joint_velocity caps the norm of the joint velocity the solver
-  # returns; <=0 disables it.
+  # returns; <=0 disables it. This is the arm's own limit from the robot
+  # description. It was 1.0, which never fired at a singularity but did
+  # fire tracking a base disturbance - see cartesian_velocity_controller.cpp.
   ik_sigma_min: 0.05
   ik_lambda: 0.2
-  max_joint_velocity: 1.0
+  max_joint_velocity: 3.14
   # How far the integrated position command may get ahead of the measured
   # position, in rad. This is anti-windup for the integrator in
   # writeVelocityCommands(): with gazebo_ros_control pid gains configured a
@@ -66,10 +68,12 @@ sim_cartesian_velocity_controller_sim:
   # singular value at which damping starts - see the comment on init() in
   # cartesian_velocity_controller.cpp for the measurements these come from.
   # max_joint_velocity caps the norm of the joint velocity the solver
-  # returns; <=0 disables it.
+  # returns; <=0 disables it. This is the arm's own limit from the robot
+  # description. It was 1.0, which never fired at a singularity but did
+  # fire tracking a base disturbance - see cartesian_velocity_controller.cpp.
   ik_sigma_min: 0.05
   ik_lambda: 0.2
-  max_joint_velocity: 1.0
+  max_joint_velocity: 3.14
   # How far the integrated position command may get ahead of the measured
   # position, in rad. This is anti-windup for the integrator in
   # writeVelocityCommands(): with gazebo_ros_control pid gains configured a
