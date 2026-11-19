@@ -461,6 +461,54 @@ stays where it was put. In `base_link` regulation that error would read zero and
 the tool would sink with the base. If what you care about is above a couple of
 hertz, set it false and rely on the feedforward.
 
+**The model does work, as a position feedforward one loop in.** Not as the
+velocity admittance above: as an offset on the position command, inside
+`cartesian_velocity_controller.cpp` where that command is formed. The joint loop
+is a spring - its torque is `p*(q_cmd - q)` with no integral term - so whatever
+torque a joint has to hold shows up as a position error of that torque over `p`.
+The dynamics say what the torque is, so adding `(G + C·q̇)/p` to the command
+cancels the part of the deflection the model knows about. `ff_gravity` and
+`ff_coriolis` in `sim_vel_controller.yaml` weight the two terms, both 1.0 by
+default; `joint_stiffness` is the `p`, read from
+`/gazebo_ros_control/pid_gains/<joint>/p` unless set explicitly, so the
+compensation uses the same number the plant does. With no stiffness anywhere the
+feedforward switches itself off, which is the right answer for a kinematically
+positioned joint: there is no deflection to compensate.
+
+The clean way to see it is the handover. The trajectory controller leaves the arm
+sagging below its command; the Cartesian controller then latches that sagged
+position as its own reference, and without compensation the servo sags again
+from there. Joint error against the pose that was commanded, mrad:
+
+| | shoulder_lift | elbow | wrist_1 | wrist_3 | ee z |
+|---|---|---|---|---|---|
+| before handover | 6.49 | 19.89 | 18.51 | -20.14 | |
+| after, `ff_gravity: 0` | 13.04 | 39.65 | 35.64 | -40.22 | 0.45888 |
+| after, `ff_gravity: 1` | **6.48** | **19.87** | **18.49** | **-20.12** | **0.47328** |
+
+Every joint doubles without it and holds exactly with it, which is the
+clearest confirmation available that the offset is the deflection: the second
+sag is the same size as the first. 14.4 mm at the end effector. The sign and
+size were also predicted before any of this was written - at this pose the
+model gives `G` of -18.848 Nm at shoulder_lift and -18.815 Nm at elbow, which
+over `p` of 2925 and 940 is -6.4 and -20.0 mrad, against the 6.5 and 20.0 mrad
+the arm was measured sitting past its command.
+
+What it does not do, and should not be expected to: it carries no information
+about an external force, so it does not stiffen the arm against being pushed.
+Under 100 N the end effector still drops 37.5 mm with it on against 35.6 mm
+with it off. And with the PID loop closed on top, steady state was already
+micrometres, so nothing changes there - a 10 mm step still settles inside 0.5 s.
+Where it earns its place is one loop in: the Cartesian controller on its own,
+which is also what `sim_admittance_control` and anything commanding twists
+directly are using.
+
+The inertial term is deliberately absent. It needs the desired joint
+acceleration, which here would have to be differenced from a command arriving at
+250 Hz into a 1 kHz loop - a train of spikes rather than an acceleration. That
+is the same trap the velocity admittance fell into, and the lesson is the same
+one: a feedforward is only as good as the derivative it is built on.
+
 ### 4.5 Tuning
 
 | File | What |

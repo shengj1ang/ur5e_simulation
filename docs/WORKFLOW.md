@@ -198,6 +198,20 @@ Measure the end effector on `/ee_pose_ground_truth`, which is in world.
 the blind spot this disturbance exploits - see README section 4.4 for the
 numbers and what they mean.
 
+### Turn the model's position feedforward up or down
+
+`ff_gravity` and `ff_coriolis` in the `sim_cartesian_velocity_controller*` blocks
+of `sim_vel_controller.yaml`, both 1.0. They weight the `(G + C qdot)/p` offset
+the Cartesian controller adds to its position command to cancel the joint
+servos' deflection; 0 disables a term. `joint_stiffness` is the `p` and is read
+from `/gazebo_ros_control/pid_gains/<joint>/p` unless you set it, so if you
+retune the joint gains the compensation follows automatically. No rebuild;
+re-sync and restart.
+
+The controller says at startup whether it is on, and says so too when it finds
+no stiffness - which is correct and not a fault when the joints are positioned
+kinematically. README section 4.4 has what it buys and what it does not.
+
 ### Change how stiff the arm is
 
 `sim/sim_bringup/config/gazebo_joint_pid_gains.yaml`, one `{p, i, d, i_clamp}`
@@ -542,6 +556,7 @@ Two traps worth knowing:
 | The gantry will not move when commanded | `gantry_velocity_controller` is not started, or its effort limit is below what it has to push. Nothing in bringup starts it; `gantry_disturbance.launch` does. |
 | The gantry drifts or spins when the arm moves | Its effort limit is below the reaction the arm can produce, so Gazebo's velocity motor loses (README section 6). |
 | The arm holds a perfect `ee_state` pose while the tool wanders the room | `ee_state` is in `base_link`. Either set `regulate_in_world: true` or measure on `/ee_pose_ground_truth` (README section 4.4). |
+| The arm drops a centimetre the moment the Cartesian controller is started | Its reference is latched from the already-sagged measurement and the servo sags again from there. `ff_gravity: 1` cancels it (README section 4.4). |
 | The model feedforward does nothing although the admittances are set | The dynamics are unusable - the arm is at a singularity (it starts at one) or `sim_cartesian_dynamics_controller` is not running. The node says so, throttled to every 5 s. |
 | The whole plugin library fails to load, `undefined symbol: ..._6HYBRIDE` | KDL declares some `static const int` members (`ChainJntToJacDotSolver::HYBRID` and friends) without defining them. Binding a reference to one — which `setRepresentation(const int&)` and `setHybridRepresentation()` do — leaves the library undefined. Copy the value into a local first. |
 | The PID node never starts, no error | Its constructor blocks until TF `base_link` -> `ee_link` exists. Something has to publish it — `robot_state_publisher`, which full bringup starts and a cut-down rig may not. |

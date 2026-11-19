@@ -9,6 +9,7 @@
 #include <controller_interface/controller.h>
 #include <kdl/chainiksolvervel_pinv.hpp>
 #include <kdl/chainiksolvervel_wdls.hpp>
+#include <kdl/chaindynparam.hpp>
 #include <kdl/chainfksolvervel_recursive.hpp>
 #include <kdl/chainfksolverpos_recursive.hpp>
 #include "sim_cartesian_velocity_control/kinematic_chain_controller_base.h"
@@ -66,6 +67,15 @@ public:
    */
   virtual void writeVelocityCommands(const ros::Duration& period) = 0;
 
+  /** \brief Build the dynamics model and find the joint stiffness it needs */
+  void setupFeedforward(ros::NodeHandle &n);
+
+  /** \brief Work out how far ahead of the reference the position command has
+   * to sit for the joint servos to land on it, given what the model says they
+   * are carrying
+   */
+  void computeFeedforwardOffset();
+
   /** \brief Scale q_dt_cmd_ down uniformly when its norm exceeds
    * max_joint_velocity_, so that the direction of the motion is preserved.
    */
@@ -93,6 +103,17 @@ protected:
   // How far the integrated position command may get ahead of the measured
   // position, in rad; <=0 disables the limit. See writeVelocityCommands().
   double max_command_lead_;
+
+  // Model-based position feedforward - see computeFeedforwardOffset()
+  KDL::Chain dyn_chain_;                      // kdl_chain_ plus the tip payload
+  boost::shared_ptr<KDL::ChainDynParam> dyn_param_;
+  KDL::JntArray gravity_torque_;              // G(q)
+  KDL::JntArray coriolis_torque_;             // C(q,qdot) qdot
+  KDL::JntArray dq_ff_;                       // the offset, in rad
+  std::vector<double> joint_stiffness_;       // Nm/rad, per joint
+  double ff_gravity_;                         // weight on G(q)
+  double ff_coriolis_;                        // weight on C(q,qdot) qdot
+  bool ff_enabled_;                           // false without a stiffness
 
   boost::shared_ptr<realtime_tools::RealtimePublisher<nav_msgs::Odometry> > realtime_pub_;
 

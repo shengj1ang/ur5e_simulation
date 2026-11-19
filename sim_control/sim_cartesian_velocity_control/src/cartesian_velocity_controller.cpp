@@ -1,8 +1,12 @@
 #include <pluginlib/class_list_macros.h>
 #include "sim_cartesian_velocity_control/kinematic_chain_controller_base.h"
 #include "sim_cartesian_velocity_control/cartesian_velocity_controller.h"
+#include "sim_cartesian_velocity_control/distal_inertia.h"
 #include "kdl_conversions/kdl_msg.h"
+#include <urdf/model.h>
 #include <cmath>
+#include <string>
+#include <vector>
 
 namespace controller_interface
 {
@@ -76,6 +80,8 @@ bool CartesianVelocityControllerBase<T>::init(T *robot, ros::NodeHandle &n)
   n.param("ik_lambda", ik_lambda_, 0.2);
   n.param("max_joint_velocity", max_joint_velocity_, 1.0);
   n.param("max_command_lead", max_command_lead_, 0.1);
+  n.param("ff_gravity", ff_gravity_, 1.0);
+  n.param("ff_coriolis", ff_coriolis_, 1.0);
 
   // 'eps' of the wdls solver is the singular value threshold, ik_sigma_min.
   KDL::ChainIkSolverVel_wdls *wdls =
@@ -97,6 +103,8 @@ bool CartesianVelocityControllerBase<T>::init(T *robot, ros::NodeHandle &n)
   }
   realtime_pub_.reset(new realtime_tools::RealtimePublisher<nav_msgs::Odometry>(n, "ee_state", 4));
 
+  setupFeedforward(n);
+
   // Topics
   sub_command_ = n.subscribe("command_cart_vel", 5, &CartesianVelocityControllerBase<T>::command_cart_vel,
                              this,ros::TransportHints().reliable().tcpNoDelay());
@@ -111,6 +119,169 @@ bool CartesianVelocityControllerBase<T>::init(T *robot, ros::NodeHandle &n)
   x_dot_.M.Identity();
 
   return true;
+}
+
+/** \brief Build the dynamics model and find the joint stiffness it needs
+ *
+ * See computeFeedforwardOffset() for what this is for. The stiffness is the
+ * only part that is not in the robot description: it is a property of whatever
+ * closes the joint loop. Under Gazebo that is gazebo_ros_control, so the
+ * default is to read its own gains - the same numbers the plant is using, which
+ * is exactly what makes the compensation match. Set joint_stiffness explicitly
+ * for anything else.
+ *
+ * With no stiffness found, the feedforward switches itself off rather than
+ * guessing. That is the right answer for the kinematic plant: with no
+ * /gazebo_ros_control/pid_gains the joint goes exactly where it is told and
+ * there is no deflection to compensate.
+ */
+template<typename T>
+void CartesianVelocityControllerBase<T>::setupFeedforward(ros::NodeHandle &n)
+{
+  const unsigned int n_joints = this->kdl_chain_.getNrOfJoints();
+  gravity_torque_.resize(n_joints);
+  coriolis_torque_.resize(n_joints);
+  dq_ff_.resize(n_joints);
+  KDL::SetToZero(dq_ff_);
+  ff_enabled_ = false;
+  dyn_chain_ = this->kdl_chain_;
+
+  std::string tip_name;
+  this->nh_.getParam(this->nh_.getNamespace() + "/tip_name", tip_name);
+
+  std::string robot_description, xml;
+  urdf::Model model;
+  if (ros::param::search(this->nh_.getNamespace(), "robot_description", robot_description) &&
+      this->nh_.getParam(robot_description, xml) && model.initString(xml))
+  {
+    double payload_mass = 0.0;
+    KDL::Vector payload_com;
+    dyn_chain_ = chainWithTipPayload(this->kdl_chain_, model, tip_name,
+                                     &payload_mass, &payload_com);
+    if (payload_mass > 0.0)
+      ROS_INFO("Cartesian velocity controller: %.4f kg attached beyond %s is in "
+               "the feedforward model, centre of mass (%.4f %.4f %.4f)",
+               payload_mass, tip_name.c_str(),
+               payload_com.x(), payload_com.y(), payload_com.z());
+  }
+  else
+  {
+    ROS_WARN("Cartesian velocity controller: could not re-read the robot "
+             "description, the feedforward model will not include anything "
+             "attached beyond %s", tip_name.c_str());
+  }
+
+  // Gravity in the root frame. See the dynamics controller for why -z is right
+  // on this model.
+  std::vector<double> gravity_param;
+  KDL::Vector gravity(0.0, 0.0, -9.81);
+  if (n.getParam("gravity", gravity_param) && gravity_param.size() == 3)
+    gravity = KDL::Vector(gravity_param[0], gravity_param[1], gravity_param[2]);
+  dyn_param_.reset(new KDL::ChainDynParam(dyn_chain_, gravity));
+
+  // Joint stiffness: explicit, else gazebo_ros_control's own p gains.
+  joint_stiffness_.assign(n_joints, 0.0);
+  std::vector<double> explicit_stiffness;
+  if (n.getParam("joint_stiffness", explicit_stiffness))
+  {
+    if (explicit_stiffness.size() != n_joints)
+    {
+      ROS_ERROR("joint_stiffness has %lu entries, the chain has %u joints; "
+                "the model feedforward stays off",
+                explicit_stiffness.size(), n_joints);
+      return;
+    }
+    joint_stiffness_ = explicit_stiffness;
+  }
+  else
+  {
+    for (std::size_t i = 0; i < this->joint_handles_.size(); i++)
+    {
+      const std::string key = "/gazebo_ros_control/pid_gains/" +
+                              this->joint_handles_[i].getName() + "/p";
+      double p = 0.0;
+      if (ros::param::get(key, p))
+        joint_stiffness_[i] = p;
+    }
+  }
+
+  std::size_t have = 0;
+  for (std::size_t i = 0; i < joint_stiffness_.size(); i++)
+    if (joint_stiffness_[i] > 0.0) have++;
+
+  if (have == 0)
+  {
+    ROS_INFO("Cartesian velocity controller: no joint stiffness found, so no "
+             "model feedforward. That is correct when the joints are positioned "
+             "kinematically - there is no deflection to compensate.");
+    return;
+  }
+  if (have != n_joints)
+    ROS_WARN("Cartesian velocity controller: a joint stiffness is missing for "
+             "%u of %u joints; those joints get no feedforward",
+             n_joints - (unsigned int)have, n_joints);
+
+  ff_enabled_ = (ff_gravity_ != 0.0) || (ff_coriolis_ != 0.0);
+  ROS_INFO("Cartesian velocity controller: model position feedforward %s "
+           "(gravity weight %.3f, coriolis weight %.3f)",
+           ff_enabled_ ? "on" : "off (both weights are zero)",
+           ff_gravity_, ff_coriolis_);
+}
+
+/** \brief Work out how far ahead of the reference the position command has to
+ * sit for the joint servos to land on it
+ *
+ * The joint loop is a spring: gazebo_ros_control's per-joint PID produces a
+ * torque p*(q_cmd - q), so whatever torque the joint has to hold shows up as a
+ * position error of that torque over p. With no integral gain - and there is
+ * none, deliberately, see gazebo_joint_pid_gains.yaml - that error does not go
+ * away. Measured at the SRDF 'init' pose, the arm sits 29 mm below where it was
+ * told to be.
+ *
+ * The dynamics say what that torque is: M qddot + C qdot + G. So adding
+ * (G + C qdot)/p to the position command cancels the part of the deflection
+ * that gravity and the arm's own motion cause, and the joint lands on the
+ * reference instead of below it. The inertial term is left out: it needs the
+ * desired joint acceleration, which here would have to be differenced from a
+ * command that arrives at 250 Hz into a 1 kHz loop, and that is a train of
+ * spikes rather than an acceleration.
+ *
+ * The sign and the size were checked against measurements taken before this
+ * existed. At the SRDF 'init' pose the model gives G of -18.848 Nm at
+ * shoulder_lift and -18.815 Nm at elbow; with p of 2925 and 940 that predicts
+ * deflections of -6.4 mrad and -20.0 mrad, and the arm was measured sitting
+ * 6.5 mrad and 20.0 mrad past its command at those two joints.
+ *
+ * This is a position offset, so it only means anything on a position
+ * interface. It is applied in CartesianVelocityControllerSim and ignored by the
+ * velocity-interface instantiation, where the joint loop is not ours to
+ * compensate.
+ *
+ * Note what it does not do: it carries no information about an external force,
+ * so it does not stiffen the arm against being pushed. It cancels the
+ * deflection from loads the model knows about, which is gravity above all.
+ */
+template<typename T>
+void CartesianVelocityControllerBase<T>::computeFeedforwardOffset()
+{
+  if (!ff_enabled_)
+    return;
+
+  dyn_param_->JntToGravity(this->joint_msr_.q, gravity_torque_);
+  dyn_param_->JntToCoriolis(this->joint_msr_.q, this->joint_msr_.qdot,
+                            coriolis_torque_);
+
+  for (std::size_t i = 0; i < this->joint_handles_.size(); i++)
+  {
+    if (joint_stiffness_[i] <= 0.0)
+    {
+      dq_ff_(i) = 0.0;
+      continue;
+    }
+    const double torque = ff_gravity_ * gravity_torque_(i) +
+                          ff_coriolis_ * coriolis_torque_(i);
+    dq_ff_(i) = torque / joint_stiffness_[i];
+  }
 }
 
 /** \brief This is called from within the realtime thread just before the
@@ -164,6 +335,7 @@ void CartesianVelocityControllerBase<T>::update(const ros::Time& time, const ros
   }
 
   limitJointVelocities();
+  computeFeedforwardOffset();
   writeVelocityCommands(period);
 
   // Forward kinematics
@@ -317,7 +489,12 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Duration& 
       }
     }
 
-    this->joint_handles_[i].setCommand(q_cmd_(i));
+    // The offset is added at the output only, never accumulated into q_cmd_:
+    // q_cmd_ is the reference the joint should land on, and the offset is the
+    // lead it takes to get there. Keeping them apart is also what lets the
+    // anti-windup above compare the reference with the measurement, which is
+    // the comparison that means something.
+    this->joint_handles_[i].setCommand(q_cmd_(i) + this->dq_ff_(i));
   }
 }
 

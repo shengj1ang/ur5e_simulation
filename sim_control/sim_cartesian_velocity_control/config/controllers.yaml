@@ -25,6 +25,21 @@
     # without this the command would keep climbing and the joint would jump
     # when it caught up. <=0 disables.
     max_command_lead: 0.1
+    # Model-based position feedforward. The per-joint loop is a spring - its
+    # torque is p*(q_cmd - q) with no integral term - so whatever torque a joint
+    # has to hold shows up as a position error of that torque over p, and the arm
+    # sits 29 mm below where it was told to be. These weights add (G + C qdot)/p
+    # to the position command to cancel it: 1.0 uses the model as it is, 0
+    # disables the term. See computeFeedforwardOffset() in
+    # cartesian_velocity_controller.cpp.
+    ff_gravity: 1.0
+    ff_coriolis: 1.0
+    # The p above. Left unset it is read from
+    # /gazebo_ros_control/pid_gains/<joint>/p, which is the gain the plant is
+    # actually using; with neither, the feedforward switches itself off, which is
+    # the right answer for a kinematically positioned joint. Set it explicitly as
+    # a list of six, root to tip, for anything that is not gazebo_ros_control.
+    # joint_stiffness: [3120.0, 2925.0, 940.0, 70.0, 50.0, 19.0]
 
   # Controller for gazebo (velocity interface on top of a position interface)
   cartesian_velocity_controller_sim:
@@ -52,6 +67,21 @@
     # without this the command would keep climbing and the joint would jump
     # when it caught up. <=0 disables.
     max_command_lead: 0.1
+    # Model-based position feedforward. The per-joint loop is a spring - its
+    # torque is p*(q_cmd - q) with no integral term - so whatever torque a joint
+    # has to hold shows up as a position error of that torque over p, and the arm
+    # sits 29 mm below where it was told to be. These weights add (G + C qdot)/p
+    # to the position command to cancel it: 1.0 uses the model as it is, 0
+    # disables the term. See computeFeedforwardOffset() in
+    # cartesian_velocity_controller.cpp.
+    ff_gravity: 1.0
+    ff_coriolis: 1.0
+    # The p above. Left unset it is read from
+    # /gazebo_ros_control/pid_gains/<joint>/p, which is the gain the plant is
+    # actually using; with neither, the feedforward switches itself off, which is
+    # the right answer for a kinematically positioned joint. Set it explicitly as
+    # a list of six, root to tip, for anything that is not gazebo_ros_control.
+    # joint_stiffness: [3120.0, 2925.0, 940.0, 70.0, 50.0, 19.0]
 
   # Cartesian state publisher
   cartesian_state_controller:
