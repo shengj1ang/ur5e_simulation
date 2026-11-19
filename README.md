@@ -719,8 +719,10 @@ The same problem solved with k-means instead.
   damping starts; KDL's own default for it is 1e-5, far below anything this
   chain reaches, so damping would never engage and the value has to be chosen
   for the robot. `ik_lambda` (0.2) is the damping factor. `max_joint_velocity`
-  (1.0 rad/s) caps the norm of the solution and is an unconditional backstop
-  that the other two keep it from reaching. The controller now also warns,
+  (3.14 rad/s, the arm's own limit from the robot description) caps the norm of
+  the solution unconditionally. It was 1.0, which never fired at a singularity
+  — the damping is what holds those — but did fire tracking a base disturbance,
+  where it cost 14.6 points of rejection at 3 Hz. The controller now also warns,
   throttled, when it is solving near a singularity, which it used to do
   silently. The measured singular values behind these defaults are in the
   comment on `init()` in `cartesian_velocity_controller.cpp`.

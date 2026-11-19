@@ -612,9 +612,11 @@ roslaunch sim_bringup gantry_disturbance.launch axis:=y amplitude:=0.02 frequenc
   有三个参数控制这件事，在 `sim_vel_controller.yaml` 和 `controllers.yaml` 里。
   `ik_sigma_min`（0.05）是阻尼开始介入的奇异值；KDL 自己的默认值是 1e-5，远低于这条链
   实际会达到的任何值，照搬的话阻尼永远不会启动，所以这个值必须按机器人来选。
-  `ik_lambda`（0.2）是阻尼系数。`max_joint_velocity`（1.0 rad/s）给解的范数封顶，是一道
-  无条件的兜底——有前两个参数在，正常情况下够不到它。控制器现在还会在靠近奇异点求解时
-  发出（限频的）警告，这件事以前是悄无声息的。这些默认值背后实测的奇异值，记在
+  `ik_lambda`（0.2）是阻尼系数。`max_joint_velocity`（3.14 rad/s，取机器人描述里
+  机械臂自己的限值）无条件地给解的范数封顶。它原来是 1.0：在奇异点上它从来没
+  触发过——扛住奇异点的是阻尼——但跟踪底座扰动时它是约束瓶颈，在 3 Hz 上吃掉了
+  14.6 个点的抑制率。控制器现在还会在靠近奇异点求解时发出（限频的）警告，这件事
+  以前是悄无声息的。这些默认值背后实测的奇异值，记在
   `cartesian_velocity_controller.cpp` 中 `init()` 的注释里。
 
 * **Gazebo 报出来的关节速度不是关节的速度。** `sim_cartesian_velocity_control` 里的控制器

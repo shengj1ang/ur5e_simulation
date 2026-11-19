@@ -176,7 +176,7 @@ copies under `sim_admittance_control` and `sim_cartesian_velocity_control`), in 
 |---|---|---|
 | `ik_sigma_min` | 0.05 | The singular value at which damping starts. Higher damps earlier and more often, at the cost of tracking everywhere; 0.3 already costs 10 % of the commanded speed at a well-conditioned pose. 0 disables damping and gives you the old undamped pseudo-inverse. |
 | `ik_lambda` | 0.2 | How hard it damps once below that threshold. |
-| `max_joint_velocity` | 1.0 | Hard cap on the norm of the joint velocity, applied after the solver. `<=0` disables it. |
+| `max_joint_velocity` | 3.14 | Hard cap on the norm of the joint velocity, applied after the solver; this is the arm's own limit from the robot description. `<=0` disables it. It was 1.0, which never fired at a singularity but was the binding constraint on rejecting a base disturbance. |
 | `velocity_filter_cutoff` | 30.0 | Low pass on the joint velocity, which these controllers differentiate from the measured position because Gazebo's reported velocity is unusable (README §6). `<=0` turns the filter off. Also read by `sim_cartesian_state_controller`. |
 
 No rebuild; re-sync and restart. The controller prints the three values when it
