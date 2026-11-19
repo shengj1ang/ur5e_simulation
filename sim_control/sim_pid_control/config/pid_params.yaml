@@ -134,6 +134,19 @@ integral_limit: 0.05
 # compliance belongs as a position feedforward where that integration happens,
 # next to q_cmd_ in cartesian_velocity_controller.cpp, not as a velocity
 # admittance one loop out. See README section 4.4.
+#
+# Filling these in is not the missing step, and that is a statement about the
+# form rather than about tuning. The deflection to be cancelled is tau/p, which
+# has no frequency dependence; the path from here to a position contributes
+# 1/(jw). For a constant A to satisfy both, A would have to be proportional to
+# jw - a differentiator, not a constant - so one constant can be correct at one
+# frequency at most, and the thing it would have to differentiate is already an
+# acceleration. A_gravity is worse than that: p(q) is constant at a fixed pose,
+# so the only steady effect a non-zero A_gravity can have is to move the
+# equilibrium by A_gravity*p/K_p, which is a bias and not a compensation.
+# A_coriolis acts on mu, which is near zero at the joint speeds reached here.
+# The place for a model that compensates servo compliance is the position
+# feedforward, where it now is.
 A_inertia:  [0,0,0,0,0,0,
              0,0,0,0,0,0,
              0,0,0,0,0,0,

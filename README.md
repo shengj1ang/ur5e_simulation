@@ -574,17 +574,57 @@ three bringups:
 | 3 Hz | 11 | +0.36 ± 0.57 | [−0.90, +1.62] | no |
 | 5 Hz | 11 | +1.96 ± 0.70 | [+0.41, +3.51] | yes, at 95 % |
 
-So the term buys about two points at 5 Hz and nothing measurable at 3 Hz or
-1 Hz. The 1 Hz control bracketing zero is what makes the 5 Hz result credible:
-the effect appears in step with the base acceleration - 0.79, 7.1 and
-19.7 m/s² - rather than with elapsed time. Its size is poorly determined. The
-two runs disagree, +0.75 against +2.96, because the OFF baseline itself wanders
-about seven points from pair to pair inside a single bringup: 30.7 % to 37.5 %
-at 3 Hz here, 30.6 % to 37.2 % in the independent run. Both runs used a fixed
-OFF→ON order, so that drift enters each paired difference at first order. An
-ABBA order would cancel it to first order, and is what the next measurement
-should use. Resolving half a point at 3 Hz against this baseline needs of the
-order of forty pairs.
+Every pair above ran OFF then ON, so a baseline drifting across the pair enters
+each difference at first order. Measured again in ABBA order - OFF ON ON OFF per
+block, where a linear drift cancels exactly between the block's two differences
+- in one further bringup:
+
+| Frequency | Blocks | ABBA OFF − ON, mean ± SE | 95 % interval | Resolved |
+|---|---:|---:|---:|---|
+| 1 Hz | 3 | −0.61 ± 0.16 | [−1.28, +0.07] | no |
+| 3 Hz | 7 | +0.05 ± 0.62 | [−1.47, +1.57] | no |
+| 5 Hz | 6 | +1.01 ± 1.10 | [−1.81, +3.82] | no |
+
+The order was not the problem. The drift ABBA removed averaged +0.21 points per
+segment over the 5 Hz blocks - individual blocks reached ±4 with random sign -
+so the fixed-order estimates were not materially biased, and the two designs
+differ by sampling rather than by order. ABBA did not reduce the scatter either:
+the block-to-block standard deviation at 5 Hz is 2.68 points, the same as the
+pair-to-pair standard deviation before it. What varies is not a drift that any
+ordering can cancel. It is the arm's own state, at the two-to-three point level,
+and it is the floor of this rig.
+
+Combining the two designs by inverse variance, the ABBA estimates being unbiased
+and the fixed-order ones measured to be nearly so:
+
+| Frequency | Combined OFF − ON | 95 % interval |
+|---|---:|---:|
+| 1 Hz | −0.18 ± 0.08 | [−0.33, −0.02] |
+| 3 Hz | +0.22 ± 0.42 | [−0.60, +1.04] |
+| 5 Hz | +1.69 ± 0.59 | [+0.53, +2.84] |
+
+So the term is worth of order one point at 5 Hz, nothing at 3 Hz, and about two
+tenths of a point against you at 1 Hz, where there is no inertial load to
+compensate and only the cost of injecting an offset is left. That last row is a
+reason to gate the term on the magnitude of the base acceleration rather than
+leave it on at all frequencies. The 5 Hz figure excludes zero in the combination
+but not in ABBA alone, so it is not settled: narrowing its interval to half a
+point would take about 127 ABBA blocks, some two and a half hours of simulation,
+against about 47 blocks at 3 Hz.
+
+Two things were confirmed rather than assumed. The controller's own state topic
+showed the model active for 100 % of the fit window in 33 of 34 ON segments, the
+one exception being a segment the base-amplitude screen had already rejected.
+And the clip counters stayed at zero across all 68 ABBA segments, so whatever
+the term is worth, that is the whole of the model's effect here rather than a
+clipped part of it.
+
+The test pose is a well-conditioned one, which is worth stating because the
+ceiling on rejection would otherwise be suspect. At the SRDF `init` pose the
+geometric Jacobian, computed from the UR5e DH parameters, has a smallest
+singular value of 0.214 and a condition number of 8.6 - the best of the six
+named poses in the SRDF, and well clear of the 0.05 at which `ik_sigma_min`
+begins to damp.
 
 The analytic acceleration bypasses p3d for this feedforward term. World-frame
 feedback still forms its pose error from the 50 Hz `/base_pose_ground_truth`
