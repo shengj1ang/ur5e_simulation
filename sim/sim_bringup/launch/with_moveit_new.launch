@@ -18,9 +18,8 @@
         <arg name="headless" value="$(arg headless)"/>
     </include>
 
-    <!-- Load the URDF into the ROS Parameter Server -->
-    <arg name="model" default="$(find xacro)/xacro  '$(find sim_description)/urdf/xacro/main.xacro'" />
-    <param name="robot_description" command="$(arg model)" />
+    <arg name="base_pose_update_rate" default="50.0"/>
+    <arg name="model" default="$(find xacro)/xacro '$(find sim_description)/urdf/xacro/main.xacro' base_pose_update_rate:=$(arg base_pose_update_rate)" />
 
     <!-- Run a python script to the send a service call to gazebo_ros to spawn a URDF robot -->
     <!-- Joint-level PID gains for gazebo_ros_control. These must be on the
@@ -45,6 +44,8 @@
           -J wrist_3_joint 0" />
 
     <include file="$(find sim_moveit_config)/launch/sim_bringup_moveit.launch"/>
+    <!-- Apply the selected model after MoveIt loads its default description. -->
+    <param name="robot_description" command="$(arg model)" />
     <!-- machine_tool_control does not ship with this repository. The include is
          opt-in so that bringup works in a plain checkout; pass
          use_machine_tool:=true once that package is in your workspace. -->

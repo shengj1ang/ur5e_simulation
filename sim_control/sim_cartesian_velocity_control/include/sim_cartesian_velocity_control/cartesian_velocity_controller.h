@@ -9,6 +9,7 @@
 #include <geometry_msgs/Pose.h>
 #include <geometry_msgs/Vector3Stamped.h>
 #include <nav_msgs/Odometry.h>
+#include <std_msgs/Bool.h>
 #include <hardware_interface/joint_command_interface.h>
 #include <controller_interface/controller.h>
 #include <kdl/chainiksolvervel_pinv.hpp>
@@ -167,7 +168,8 @@ public:
 
 private:
   void baseAccelerationCallback(const geometry_msgs::Vector3StampedConstPtr& msg);
-  bool computeInertialTorque(const ros::Time& time);
+  void staticInertiaMappingCallback(const std_msgs::BoolConstPtr& msg);
+  bool computeInertialTorque(const KDL::Vector& base_acceleration);
 
   /**
    * Write velocity commands through a position interface
@@ -180,6 +182,9 @@ private:
     KDL::Vector linear = KDL::Vector::Zero();
   };
   realtime_tools::RealtimeBuffer<BaseAcceleration> base_acceleration_;
+  realtime_tools::RealtimeBuffer<bool> static_mapping_requested_{false};
+  bool inertia_mapping_experiment_ = false;
+  bool static_inertia_mapping_ = false;
   ros::Time started_at_;
   std::string root_name_;
   bool inertia_feedforward_enabled_ = false;
@@ -197,6 +202,7 @@ private:
   ros::Time last_inertia_state_time_;
   std::vector<std::uint32_t> torque_clip_count_;
   ros::Subscriber base_acceleration_subscriber_;
+  ros::Subscriber static_mapping_subscriber_;
 };
 
 } // namespace controller_interface

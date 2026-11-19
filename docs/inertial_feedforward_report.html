@@ -78,6 +78,53 @@
     <p>ABBA 轮的 68 段中钳位计数全为零，且 34 个 ON 段中 33 个在拟合窗内模型激活率为 100%（唯一例外已被基座幅值筛选剔除）。按 UR5e 的 DH 参数计算，SRDF 的 <code>init</code> 位姿几何雅可比最小奇异值为 0.214、条件数 8.6，是 SRDF 六个具名位姿中最好的，远在 <code>ik_sigma_min</code> 的 0.05 之上，所以抑制率的上限不是位姿条件造成的。</p>
     <p>解析加速度用于惯性前馈，世界系反馈仍使用 50 Hz p3d 基座状态，半个采样周期在 3 Hz 约为 10.8°。已安装的 p3d 直接读取 Gazebo 连杆速度。3 Hz 时，速度相对同一位移基频求导的中位相位差为 -0.73°。</p>
   </section>
+
+  <section aria-labelledby="mapping-rate-experiments">
+    <h2 id="mapping-rate-experiments">补充实验 · 动态映射与基座反馈频率</h2>
+    <p>在同一次 headless 仿真中，保持世界系目标、PID 增益和关节限幅。20 mm Y 轴扰动在 1、3、5 Hz 各做六个区块。每个区块换序测试四种配置，按同区块配对比较。关闭组仅停止发送解析加速度。静态组把同一钳位后的模型力矩除以关节刚度，动态组经过现有逆 PD。两种映射使用相同的位移偏置上限。设备在试验前到达 SRDF <code>init</code> 附近，固定的是世界系目标。</p>
+    <div class="table-frame"><table>
+      <caption>表 2　50 Hz 下的惯量映射对照</caption>
+      <thead><tr><th scope="col">频率 (Hz)</th><th scope="col">关闭 (%)</th><th scope="col">静态 (%)</th><th scope="col">动态 (%)</th>
+         <th scope="col">关闭 − 静态 (百分点)</th><th scope="col">静态 − 动态 (百分点)</th></tr></thead>
+      <tbody><tr><th scope="row">1</th><td>7.86</td><td>7.93</td>
+        <td>8.00</td><td>-0.07 [-0.22, +0.09]</td><td>-0.08 [-0.26, +0.10]</td></tr><tr><th scope="row">3</th><td>34.09</td><td>33.28</td>
+        <td>33.08</td><td>+0.81 [-0.86, +2.49]</td><td>+0.20 [-1.26, +1.66]</td></tr><tr><th scope="row">5</th><td>62.87</td><td>62.46</td>
+        <td>62.73</td><td>+0.41 [-3.41, +4.23]</td><td>-0.27 [-3.75, +3.20]</td></tr></tbody>
+    </table></div>
+    <figure><img src="img/inertia_mapping_modes.png" width="2520" height="1065"
+        alt="50 Hz 下的三种映射均值，以及区块内两类配对差和 95% 区间。">
+      <figcaption><strong>图 4.</strong> 配对差的点为各区块，菱形和误差棒为均值及 95% 区间。正值表示后一个配置的传递率下降。</figcaption></figure>
+    <p>同一台 Gazebo 同时发布 50 Hz 和 200 Hz 的原生基座状态，使用同一个转发节点切换 PID 收到的状态。末端真值仍以 50 Hz 记录，两组均使用动态映射。这个对照同时改变世界系反馈和使用同一基座状态的运动学前馈的时序。</p>
+    <div class="table-frame"><table>
+      <caption>表 3　动态映射下的基座反馈频率对照</caption>
+      <thead><tr><th scope="col">频率 (Hz)</th><th scope="col">50 Hz (%)</th><th scope="col">200 Hz (%)</th>
+         <th scope="col">配对差 (百分点)</th><th scope="col">末端相对基座相位 (°)</th></tr></thead>
+      <tbody><tr><th scope="row">1</th><td>8.00</td><td>3.58</td>
+        <td>+4.42 [+3.64, +5.20]</td><td>101.9 → 121.7</td></tr><tr><th scope="row">3</th><td>33.08</td><td>15.75</td>
+        <td>+17.33 [+15.09, +19.57]</td><td>84.8 → 98.1</td></tr><tr><th scope="row">5</th><td>62.73</td><td>33.07</td>
+        <td>+29.67 [+24.42, +34.91]</td><td>63.7 → 76.9</td></tr></tbody>
+    </table></div>
+    <figure><img src="img/base_feedback_rate_comparison.png" width="2520" height="1065"
+        alt="20 mm 主对照中两种基座采样率的传递率，以及更宽频率和更大振幅下的单次摸底数据。">
+      <figcaption><strong>图 5.</strong> 左图误差棒为各配置均值的 95% 区间，表 3 给出区块内配对差的 95% 区间。右图各工况仅测一次。</figcaption></figure>
+    <details><summary>展开查看宽频率与振幅摸底</summary>
+      <div class="table-frame"><table>
+        <thead><tr><th scope="col">频率 (Hz)</th><th scope="col">峰值 (mm)</th><th scope="col">50 Hz (%)</th>
+          <th scope="col">200 Hz (%)</th><th scope="col">模型激活率 50 / 200 Hz (%)</th></tr></thead>
+        <tbody><tr><th scope="row">0.5</th><td>10</td><td>3.13</td>
+        <td>0.93</td><td>100 / 100</td></tr><tr><th scope="row">2</th><td>10</td><td>18.13</td>
+        <td>8.62</td><td>100 / 100</td></tr><tr><th scope="row">4</th><td>10</td><td>44.15</td>
+        <td>24.73</td><td>100 / 100</td></tr><tr><th scope="row">6</th><td>10</td><td>74.29</td>
+        <td>41.47</td><td>100 / 100</td></tr><tr><th scope="row">8</th><td>10</td><td>94.54</td>
+        <td>45.17</td><td>92 / 100</td></tr><tr><th scope="row">3</th><td>30</td><td>30.26</td>
+        <td>15.89</td><td>100 / 100</td></tr><tr><th scope="row">5</th><td>30</td><td>60.18</td>
+        <td>32.73</td><td>60 / 51</td></tr></tbody>
+      </table></div>
+    </details>
+    <p>动态映射相对静态映射的三个 95% 配对区间均跨零。5 Hz 下，各段六关节最大惯性偏置的均值从 4.03 mrad 降至 2.50 mrad。200 Hz 相对 50 Hz 的三个配对区间均高于零。主试验没有触发模型力矩钳位，零扰动短窗口的最大末端 Y 峰峰值为 0.027 μm。主试验全程的基座净位移约 56 mm，配对差在同一区块内计算。5 Hz、30 mm 的摸底触发关节限速，模型激活率为 51%–60%。</p>
+    <p>另一次启动使用净位移接近零的扰动和 ABBA 顺序复核发布频率。基座全程净移动 1.23 mm。3 Hz 平均传递率从 33.1% 降至 16.3%，5 Hz 从 62.6% 降至 29.3%。</p>
+    <p>复测可用启动参数 <code>inertia_mapping_experiment:=true</code> 启用开关。停止加速度输入并等待偏置衰减后，向 <code>/sim_cartesian_velocity_controller_sim/use_static_inertia_mapping</code> 发送布尔值，<code>true</code> 选静态换算，<code>false</code> 选动态映射。基座发布频率由 <code>base_pose_update_rate</code> 设置。逐段数据存于 VM 的 <code>/tmp/ur5e-mapping-rate.kzPBo9/trials.csv</code>。</p>
+  </section>
   <footer>数据来自同一次 VM 仿真的 <code>rostopic echo -p</code> 记录。逐组数据保存于 VM 的 <code>/tmp/ur5e-inertia-paired.BPefcd/measurements.csv</code>。
     <a href="../README.zh-CN.md">仓库配置和复测步骤</a> ·
     <a href="https://github.com/ros-simulation/gazebo_ros_pkgs/blob/2.9.3/gazebo_plugins/src/gazebo_ros_p3d.cpp#L250-L328">p3d 2.9.3 源码</a>

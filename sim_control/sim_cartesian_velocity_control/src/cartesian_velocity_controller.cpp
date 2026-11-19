@@ -510,6 +510,12 @@ bool CartesianVelocityControllerSim::init(hardware_interface::PositionJointInter
   base_acceleration_subscriber_ = n.subscribe(
       topic, 1, &CartesianVelocityControllerSim::baseAccelerationCallback,
       this, ros::TransportHints().tcpNoDelay());
+  n.param("inertia_mapping_experiment", inertia_mapping_experiment_, false);
+  if (inertia_mapping_experiment_)
+    static_mapping_subscriber_ = n.subscribe(
+        "use_static_inertia_mapping", 1, &CartesianVelocityControllerSim::staticInertiaMappingCallback,
+        this, ros::TransportHints().tcpNoDelay());
+
   inertia_feedforward_enabled_ = true;
   ROS_INFO("Cartesian velocity controller: translational inertia feedforward listens on %s", topic.c_str());
   return true;
@@ -540,15 +546,15 @@ void CartesianVelocityControllerSim::baseAccelerationCallback(const geometry_msg
   base_acceleration_.writeFromNonRT(sample);
 }
 
-bool CartesianVelocityControllerSim::computeInertialTorque(const ros::Time& time)
+void CartesianVelocityControllerSim::staticInertiaMappingCallback(const std_msgs::BoolConstPtr& msg)
 {
-  const auto& sample = *base_acceleration_.readFromRT();
-  if (sample.stamp.isZero() || sample.stamp < started_at_ || sample.stamp > time ||
-      (time - sample.stamp).toSec() > 0.05 || !reference_unconstrained_)
-    return false;
+  static_mapping_requested_.writeFromNonRT(msg->data);
+}
 
+bool CartesianVelocityControllerSim::computeInertialTorque(const KDL::Vector& base_acceleration)
+{
   // For a world-fixed tip and a translating root, J*qdd + Jdot*qdot = -a_base.
-  const KDL::Twist task_acceleration(-sample.linear, KDL::Vector::Zero());
+  const KDL::Twist task_acceleration(-base_acceleration, KDL::Vector::Zero());
   KDL::Twist jacobian_bias;
   if (jacobian_dot_->JntToJacDot(joint_msr_, jacobian_bias) != 0 ||
       ik_vel_solver_->CartToJnt(joint_msr_.q, task_acceleration - jacobian_bias,
@@ -561,11 +567,11 @@ bool CartesianVelocityControllerSim::computeInertialTorque(const ros::Time& time
   // on every link. KDL gravity torques are linear in that acceleration.
   for (unsigned int axis = 0; axis < unit_acceleration_models_.size(); ++axis)
   {
-    if (sample.linear(axis) == 0.0)
+    if (base_acceleration(axis) == 0.0)
       continue;
     if (unit_acceleration_models_[axis]->JntToGravity(joint_msr_.q, translation_torque_) != 0)
       return false;
-    inertial_torque_.data += sample.linear(axis) * translation_torque_.data;
+    inertial_torque_.data += base_acceleration(axis) * translation_torque_.data;
   }
   return inertial_torque_.data.allFinite();
 }
@@ -614,8 +620,18 @@ bool CartesianVelocityControllerSim::computeInertialTorque(const ros::Time& time
 void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time, const ros::Duration& period)
 {
   const double dt = period.toSec();
-  const bool compensate_inertia = inertia_feedforward_enabled_ && dt > 0.0 &&
-                                 computeInertialTorque(time);
+  const auto* input = inertia_feedforward_enabled_ ? base_acceleration_.readFromRT() : nullptr;
+  const bool fresh_input = input && !input->stamp.isZero() && input->stamp >= started_at_ &&
+                           input->stamp <= time && (time - input->stamp).toSec() <= 0.05;
+  const bool compensate_inertia = fresh_input && dt > 0.0 && reference_unconstrained_ &&
+                                  computeInertialTorque(input->linear);
+  const bool static_requested = inertia_mapping_experiment_ && *static_mapping_requested_.readFromRT();
+  // Switch between trials, after the last sample has expired and the offset
+  // has decayed. Switching during a disturbance would kick the servo's D term.
+  if (static_requested != static_inertia_mapping_ && !fresh_input &&
+      inertial_offset_.data.cwiseAbs().maxCoeff() < 1e-5)
+    static_inertia_mapping_ = static_requested;
+
   sim_cartesian_velocity_control::InertialFeedforwardState* state = nullptr;
   if (inertia_state_pub_ && publish_rate_ > 0.0 &&
       (time - last_inertia_state_time_).toSec() >= 1.0 / publish_rate_ &&
@@ -625,6 +641,7 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
     state = &inertia_state_pub_->msg_;
     state->header.stamp = time;
     state->active = compensate_inertia;
+    state->static_mapping = static_inertia_mapping_;
   }
   for(std::size_t i=0; i < this->joint_handles_.size(); i++)
   {
@@ -664,7 +681,7 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
     {
       const double p = joint_proportional_gain_[i];
       const double d = joint_damping_[i];
-      // A bounded torque also bounds the inverse PD's position offset to 25 mrad.
+      // Both mappings bound the position offset to 25 mrad.
       const double torque_limit = p * 0.025;
       const double model_torque = compensate_inertia ? inertial_torque_(i) : 0.0;
       const double requested_torque = lead_limited ? 0.0 : model_torque;
@@ -677,9 +694,11 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
                           joint_handles_[i].getName().c_str(), requested_torque, torque, torque_limit);
       }
       double& offset = inertial_offset_(i);
-      // Backward Euler inverse of P + D*s. Let it decay with zero added
-      // torque when the input expires; dropping a nonzero offset would kick D.
-      if (dt > 0.0)
+      if (static_inertia_mapping_ && compensate_inertia && !lead_limited)
+        offset = torque / p;
+      // Backward Euler inverse of P + D*s. Use it for inactive decay in
+      // both modes; dropping a nonzero offset would kick the servo's D term.
+      else if (dt > 0.0)
         offset += dt * (torque - p * offset) / (d + p * dt);
       command += offset;
       if (state)

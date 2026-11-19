@@ -1,6 +1,8 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="sim">
 
+    <xacro:arg name="base_pose_update_rate" default="50.0" />
+
     <xacro:include filename="$(find sim_description)/urdf/xacro/common.gazebo.xacro" />
     <xacro:include filename="$(find sim_description)/urdf/xacro/ur5e.urdf.xacro" />
 
@@ -280,7 +282,7 @@
     <gazebo>
         <plugin name="p3d_base_controller" filename="libgazebo_ros_p3d.so">
             <alwaysOn>true</alwaysOn>
-            <updateRate>50.0</updateRate>
+            <updateRate>$(arg base_pose_update_rate)</updateRate>
             <bodyName>base_link</bodyName>
             <topicName>base_pose_ground_truth</topicName>
             <gaussianNoise>0.0</gaussianNoise>
