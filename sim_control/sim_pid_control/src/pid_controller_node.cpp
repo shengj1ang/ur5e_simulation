@@ -20,6 +20,7 @@ int main(int argc, char **argv)
   std::vector<double> A_coriolis;
   std::vector<double> A_gravity;
   std::string topic_ee_dynamics;
+  bool regulate_in_world;
   std::vector<double> workspace_limits;
 
   double arm_max_vel;
@@ -76,6 +77,10 @@ int main(int argc, char **argv)
   nh.param<std::vector<double> >("A_gravity", A_gravity, zero36);
   nh.param<std::string>("topic_ee_dynamics", topic_ee_dynamics,
                         "/sim_cartesian_dynamics_controller/ee_dynamics");
+
+  /// WHICH FRAME THE TARGET IS FIXED IN. Optional, false keeps the behaviour
+  /// of a parameter file written before this existed.
+  nh.param<bool>("regulate_in_world", regulate_in_world, false);
   if (A_inertia.size() != 36 || A_coriolis.size() != 36 || A_gravity.size() != 36)
   {
     ROS_ERROR("A_inertia, A_coriolis and A_gravity must each have 36 elements, "
@@ -129,6 +134,7 @@ int main(int argc, char **argv)
       topic_arm_state,
       K_p, K_i, K_d, N_p, N_d,
       A_inertia, A_coriolis, A_gravity,
+      regulate_in_world,
       topic_ee_dynamics,
       workspace_limits,
       arm_max_vel,

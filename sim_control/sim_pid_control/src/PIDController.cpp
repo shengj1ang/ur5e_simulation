@@ -12,6 +12,7 @@ PIDController::PIDController(ros::NodeHandle &n,
                              std::vector<double> A_inertia,
                              std::vector<double> A_coriolis,
                              std::vector<double> A_gravity,
+                             bool regulate_in_world,
                              std::string topic_ee_dynamics,
                              std::vector<double> workspace_limits,
                              double arm_max_vel,
@@ -20,6 +21,7 @@ PIDController::PIDController(ros::NodeHandle &n,
                              double integral_limit) : nh_(n), loop_rate_(frequency),
                                                            K_p_(K_p.data()), K_i_(K_i.data()), K_d_(K_d.data()), N_p_(N_p.data()), N_d_(N_d.data()),
                                                            A_inertia_(A_inertia.data()), A_coriolis_(A_coriolis.data()), A_gravity_(A_gravity.data()),
+                                                           regulate_in_world_(regulate_in_world),
                                                            integral_limit_(integral_limit),
                                                            workspace_limits_(workspace_limits.data()),
                                                            arm_max_vel_(arm_max_vel),
@@ -69,6 +71,24 @@ PIDController::PIDController(ros::NodeHandle &n,
   last_model_effect_ee_twist_.setZero();
   model_affect_ee_acc_.setZero();
   model_real_.setZero();
+  equilibrium_world_position_.setZero();
+  equilibrium_world_orientation_.setIdentity();
+  equilibrium_world_valid_ = false;
+  have_base_state_ = false;
+  if (regulate_in_world_)
+  {
+    ROS_INFO("pid_controller: regulating the end effector against a target "
+             "fixed in world. The equilibrium arrives in base_link and is "
+             "carried into world when it does, so the base moving is an error "
+             "the feedback can see.");
+  }
+  else
+  {
+    ROS_INFO("pid_controller: regulating the end effector in base_link, so the "
+             "base moving is invisible to the feedback and only the N_p/N_d "
+             "feedforward stands against it");
+  }
+
   op_inertia_.setZero();
   op_coriolis_.setZero();
   op_gravity_.setZero();
@@ -158,6 +178,8 @@ void PIDController::state_arm_callback(const nav_msgs::OdometryConstPtr msg)
 
 void PIDController::base_state_callback(const nav_msgs::OdometryConstPtr msg)
 {
+  const bool first = !have_base_state_;
+  have_base_state_ = true;
   base_real_position_ << msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z;
 
   base_real_orientation_.coeffs() << msg->pose.pose.orientation.x,
@@ -217,8 +239,46 @@ void PIDController::base_state_callback(const nav_msgs::OdometryConstPtr msg)
   model_affect_ee_twist_msgs.angular.z = model_affect_ee_twist_(5);
   pub_feedback_.publish(model_affect_ee_twist_msgs);
 
+  // An equilibrium that arrived before any base pose did could not be carried
+  // into world at the time. Do it now that there is a base pose.
+  if (first && regulate_in_world_ && !equilibrium_world_valid_)
+    latch_equilibrium_in_world();
+
   // ROS_INFO("getting the model state");
   std::cout << "for feedforward: " << model_affect_ee_twist_.transpose() << std::endl;
+}
+
+/** \brief Carry the current equilibrium into the world frame and keep it
+ *
+ * The equilibrium arrives in base_link, which is the frame ee_state reports in
+ * and the frame every caller of /now_equilibrium already speaks. Regulating
+ * against it in that frame is what makes the base moving invisible to the
+ * feedback: the base carries the arm along, the end effector keeps the same
+ * base_link pose, and there is no error. Carrying it into world once, at the
+ * moment it is received, turns the same request into "hold this point in the
+ * room" without changing the interface.
+ *
+ * It is a latch rather than a running conversion on purpose. Converting every
+ * cycle would track the base and give back exactly the base_link behaviour.
+ */
+void PIDController::latch_equilibrium_in_world()
+{
+  if (!have_base_state_)
+  {
+    ROS_WARN_THROTTLE(5.0, "pid_controller: cannot carry the equilibrium into "
+                           "world yet, no base pose heard on "
+                           "/base_pose_ground_truth");
+    return;
+  }
+  const Matrix3d rotation_base_world = base_real_orientation_.toRotationMatrix();
+  equilibrium_world_position_ =
+      base_real_position_ + rotation_base_world * equilibrium_position_;
+  equilibrium_world_orientation_ = base_real_orientation_ * equilibrium_orientation_;
+  equilibrium_world_orientation_.normalize();
+  equilibrium_world_valid_ = true;
+  ROS_INFO("pid_controller: holding world (%.5f, %.5f, %.5f)",
+           equilibrium_world_position_(0), equilibrium_world_position_(1),
+           equilibrium_world_position_(2));
 }
 
 void PIDController::ee_ground_truth_state_callback(const nav_msgs::OdometryConstPtr msg)
@@ -283,6 +343,9 @@ void PIDController::now_equilibrium_callback(const geometry_msgs::PoseStampedCon
       msg->pose.orientation.y,
       msg->pose.orientation.z,
       msg->pose.orientation.w;
+
+  if (regulate_in_world_)
+    latch_equilibrium_in_world();
 
   if (msg->header.frame_id == "pid")
   {
@@ -358,20 +421,75 @@ void PIDController::compute_pid(double dt)
 {
   Vector6d error;
 
-  if (equilibrium_orientation_.coeffs().dot(arm_real_orientation_.coeffs()) < 0.0)
+  // The twist the damping term acts on. In base_link it is just what the
+  // Cartesian controller measured; in world it is that plus the base's own
+  // motion carried to the end effector, rotated back into base_link because
+  // that is the frame the command goes out in.
+  Vector6d damped_twist = arm_real_twist_;
+
+  // Whether to regulate against the world-fixed target. It needs a base pose
+  // to have been carried into world at least once; until then fall back to the
+  // base_link error rather than command from an uninitialised target.
+  const bool world = regulate_in_world_ && equilibrium_world_valid_;
+  if (regulate_in_world_ && !world)
   {
-    arm_real_orientation_.coeffs() << -arm_real_orientation_.coeffs();
-  }
-  Eigen::Quaterniond quat_rot_err(arm_real_orientation_ * equilibrium_orientation_.inverse());
-  if (quat_rot_err.coeffs().norm() > 1e-3)
-  {
-    // Normalize error quaternion
-    quat_rot_err.coeffs() << quat_rot_err.coeffs() / quat_rot_err.coeffs().norm();
+    ROS_WARN_THROTTLE(5.0, "pid_controller: asked to regulate in world but the "
+                           "equilibrium has not been carried there yet; "
+                           "regulating in base_link this cycle");
   }
 
-  Eigen::AngleAxisd err_arm_des_orient(quat_rot_err);
-  error.bottomRows(3) << err_arm_des_orient.axis() * err_arm_des_orient.angle();
-  error.topRows(3) = arm_real_position_ - equilibrium_position_;
+  if (world)
+  {
+    // Compose the end effector's world pose from the base pose and the arm's
+    // own measurement. Deliberately not from /ee_pose_ground_truth: on a real
+    // machine the gantry's position comes from its own encoders and the end
+    // effector from the arm's forward kinematics, and neither is an external
+    // ground truth of the tool.
+    const Matrix3d rotation_base_world = base_real_orientation_.toRotationMatrix();
+    const Vector3d ee_world_position =
+        base_real_position_ + rotation_base_world * arm_real_position_;
+    Quaterniond ee_world_orientation = base_real_orientation_ * arm_real_orientation_;
+    ee_world_orientation.normalize();
+
+    if (equilibrium_world_orientation_.coeffs().dot(ee_world_orientation.coeffs()) < 0.0)
+      ee_world_orientation.coeffs() << -ee_world_orientation.coeffs();
+    Eigen::Quaterniond quat_rot_err(
+        ee_world_orientation * equilibrium_world_orientation_.inverse());
+    if (quat_rot_err.coeffs().norm() > 1e-3)
+      quat_rot_err.coeffs() << quat_rot_err.coeffs() / quat_rot_err.coeffs().norm();
+    Eigen::AngleAxisd err_world_orient(quat_rot_err);
+
+    // The error is formed in world and then rotated into base_link, which is
+    // the frame the Cartesian velocity controller takes its twist in.
+    error.topRows(3) =
+        rotation_base_world.transpose() * (ee_world_position - equilibrium_world_position_);
+    error.bottomRows(3) = rotation_base_world.transpose() *
+        (err_world_orient.axis() * err_world_orient.angle());
+
+    // Damp the world velocity, not the base_link one. model_affect_ee_twist_ is
+    // the base's motion carried to the end effector, in world.
+    damped_twist.topRows(3) += rotation_base_world.transpose() *
+        model_affect_ee_twist_.topRows(3);
+    damped_twist.bottomRows(3) += rotation_base_world.transpose() *
+        model_affect_ee_twist_.bottomRows(3);
+  }
+  else
+  {
+    if (equilibrium_orientation_.coeffs().dot(arm_real_orientation_.coeffs()) < 0.0)
+    {
+      arm_real_orientation_.coeffs() << -arm_real_orientation_.coeffs();
+    }
+    Eigen::Quaterniond quat_rot_err(arm_real_orientation_ * equilibrium_orientation_.inverse());
+    if (quat_rot_err.coeffs().norm() > 1e-3)
+    {
+      // Normalize error quaternion
+      quat_rot_err.coeffs() << quat_rot_err.coeffs() / quat_rot_err.coeffs().norm();
+    }
+
+    Eigen::AngleAxisd err_arm_des_orient(quat_rot_err);
+    error.bottomRows(3) << err_arm_des_orient.axis() * err_arm_des_orient.angle();
+    error.topRows(3) = arm_real_position_ - equilibrium_position_;
+  }
 
   // Integral term. Conditional integration: each component of the stored error
   // integral is clamped so that the term it produces cannot exceed
@@ -463,7 +581,12 @@ void PIDController::compute_pid(double dt)
     }
   }
 
-  arm_desired_twist_final_ = -K_p_ * error - K_i_ * error_integral_ - K_d_ * arm_real_twist_ - N_p_ * model_affect_ee_twist_ - N_d_ * model_affect_ee_acc_ + model_feedforward_twist;
+  // With the world-fixed target the base's motion is already an error the
+  // feedback acts on, so N_p and N_d are feeding forward against something that
+  // is no longer invisible. They are left in the law - zero them in the
+  // parameter file to see the feedback on its own - but they are redundant
+  // there, and K_d now carries part of the same signal through damped_twist.
+  arm_desired_twist_final_ = -K_p_ * error - K_i_ * error_integral_ - K_d_ * damped_twist - N_p_ * model_affect_ee_twist_ - N_d_ * model_affect_ee_acc_ + model_feedforward_twist;
 
   last_error_ = error;
   last_arm_desired_twist_final_ = arm_desired_twist_final_;

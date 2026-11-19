@@ -156,3 +156,65 @@ A_gravity:  [0,0,0,0,0,0,
 
 # Where the dynamics come from. Empty or absent is the same as the default.
 topic_ee_dynamics: /sim_cartesian_dynamics_controller/ee_dynamics
+
+# ---------------------------------------------------------------------------
+# Which frame the target is fixed in
+#
+# false (what this controller did until the measurements below): the error is
+# the end effector's pose in base_link against an equilibrium in base_link. The
+# gantry carrying the arm around does not change that pose, so the base moving
+# is invisible to the feedback and only the N_p and N_d feedforward stands
+# against it. Measured with a 20 mm, 1 Hz base disturbance, the end effector
+# moved 101.5 % of the base's excursion with the feedforward off and 72.5 %
+# with it on - and the ceiling on that is structural, because holding the end
+# effector still in world means moving in base_link, which K_p opposes.
+#
+# true (the default now): the equilibrium is carried into world when it arrives,
+# and the error is
+# formed there and rotated back into base_link to be commanded. The interface
+# does not change - callers still publish a base_link pose on /now_equilibrium -
+# but the request becomes "hold this point in the room" and the base moving is
+# an error the feedback acts on directly. It needs /base_pose_ground_truth,
+# which a p3d plugin on base_link publishes at 50 Hz; without it the controller
+# falls back to base_link and says so.
+#
+# What the two settings do to the same 20 mm base disturbance, as the fraction
+# of the base's excursion that reaches the end effector in world - lower is
+# better, and N_p/N_d are at their shipped values in both columns:
+#
+#   disturbance    base_link   world
+#   0.3 Hz           96.4 %     1.9 %
+#   1 Hz             71.6 %     7.8 %
+#   3 Hz             29.9 %    52.1 %
+#
+# The two mechanisms reject opposite ends of the band, which is why the sum is
+# so much better than either and why the crossover is where it is. In base_link
+# the feedforward cancels the disturbance's velocity, so what gets through is
+# (1-N_p)jw + K_p over jw + K_p: at low frequency the K_p term dominates and
+# nothing is rejected, at high frequency only the 3 % that N_p = 0.97 leaves.
+# In world the feedback sees the disturbance as an error, so what gets through
+# is jw over jw + K_p: excellent at low frequency, nothing at high. With both,
+# the ideal is their product, (1-N_p)jw over jw + K_p, and the 1.9 % and 7.8 %
+# above are close to it.
+#
+# 3 Hz is the exception and it is not a mystery: the product would predict about
+# 3 %, and 52.1 % is worse than base_link alone. At 18.8 rad/s the loop's own
+# lag has turned the extra feedback into a liability - the sensitivity function
+# peaks above one and the correction arrives out of phase. The arm's joint
+# servos are at 28 to 44 rad/s, so 3 Hz is not far below where they stop
+# following either. If the disturbance you care about lives up there, leave this
+# false and rely on the feedforward.
+#
+# For this machine, the base disturbance that actually exists is near DC, where
+# world regulation is at its best and base_link regulation rejects nothing at
+# all. Measured with nothing driving the gantry: the base sinks at 18.3 um/s,
+# and with this true the arm rises in base_link at 14 um/s to hold its world
+# point - so the base_link error grows while the tool stays where it was put.
+# With it false that error reads zero and the tool sinks with the base. That is
+# why true is the default.
+#
+# With it true, N_p and N_d are feeding forward against something that is no
+# longer invisible, but they are not redundant: the table above is with them on,
+# and they are what carries the high-frequency end. K_d also then damps the
+# world velocity rather than the base_link one.
+regulate_in_world: true

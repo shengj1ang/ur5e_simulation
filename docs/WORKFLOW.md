@@ -220,6 +220,21 @@ with `w = sqrt(p/J)`.
 Going back to the old kinematic behaviour is `joint_pid_gains:=false` on the
 bringup.
 
+### Change which frame the target is fixed in
+
+`regulate_in_world` in `sim_control/sim_pid_control/config/pid_params.yaml`. True
+(the default) carries the equilibrium into world when it arrives and regulates
+there, so the gantry moving the arm's base is an error the feedback can see.
+False regulates in `base_link`, where it cannot. No rebuild; re-sync and restart
+the controller launch. The node says which one it is doing when it starts.
+
+It needs `/base_pose_ground_truth`. If that never arrives the controller warns,
+throttled, and regulates in `base_link` instead - so a setup without it degrades
+rather than misbehaves.
+
+README section 4.4 has the measured rejection at three frequencies, and why the
+two settings are good at opposite ends of the band.
+
 ### Switch the model feedforward on
 
 `A_inertia`, `A_coriolis` and `A_gravity` in
@@ -526,6 +541,7 @@ Two traps worth knowing:
 | `/joint_states` efforts are pinned at the effort limit from the first sample | The joint PID gains saturate immediately; see "Change how stiff the arm is". |
 | The gantry will not move when commanded | `gantry_velocity_controller` is not started, or its effort limit is below what it has to push. Nothing in bringup starts it; `gantry_disturbance.launch` does. |
 | The gantry drifts or spins when the arm moves | Its effort limit is below the reaction the arm can produce, so Gazebo's velocity motor loses (README section 6). |
+| The arm holds a perfect `ee_state` pose while the tool wanders the room | `ee_state` is in `base_link`. Either set `regulate_in_world: true` or measure on `/ee_pose_ground_truth` (README section 4.4). |
 | The model feedforward does nothing although the admittances are set | The dynamics are unusable - the arm is at a singularity (it starts at one) or `sim_cartesian_dynamics_controller` is not running. The node says so, throttled to every 5 s. |
 | The whole plugin library fails to load, `undefined symbol: ..._6HYBRIDE` | KDL declares some `static const int` members (`ChainJntToJacDotSolver::HYBRID` and friends) without defining them. Binding a reference to one — which `setRepresentation(const int&)` and `setHybridRepresentation()` do — leaves the library undefined. Copy the value into a local first. |
 | The PID node never starts, no error | Its constructor blocks until TF `base_link` -> `ee_link` exists. Something has to publish it — `robot_state_publisher`, which full bringup starts and a cut-down rig may not. |

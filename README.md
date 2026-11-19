@@ -417,6 +417,50 @@ being precise about rather than tuning around:
 So the admittances stay at zero, now for a measured reason rather than an
 argued one.
 
+**Fixing the target in world is what moves the number.** `regulate_in_world` in
+`pid_params.yaml`, now true by default, carries the equilibrium into the world
+frame at the moment it is received and forms the error there, rotating it back
+into `base_link` to command. The interface does not change: callers still
+publish a `base_link` pose on `/now_equilibrium`, but the request becomes "hold
+this point in the room", and the base moving is an error the feedback acts on
+instead of being invisible to it. It needs `/base_pose_ground_truth`; without
+it the controller falls back to `base_link` and says so.
+
+Same disturbance, same `N_p`/`N_d`, fraction of the base's excursion reaching
+the end effector in world — lower is better:
+
+| disturbance | `base_link` | world |
+|---|---|---|
+| 0.3 Hz | 96.4 % | **1.9 %** |
+| 1 Hz | 71.6 % | **7.8 %** |
+| 3 Hz | **29.9 %** | 52.1 % |
+
+The two mechanisms reject opposite ends of the band. In `base_link` the
+feedforward cancels the disturbance's velocity, so what gets through is
+`((1-N_p)jw + K_p)/(jw + K_p)`: at low frequency the `K_p` term dominates and
+nothing is rejected, at high frequency only the 3 % that `N_p` = 0.97 leaves. In
+world the feedback sees the disturbance directly, so what gets through is
+`jw/(jw + K_p)`: excellent low, nothing high. With both, the ideal is the
+product `(1-N_p)jw/(jw + K_p)`, and 1.9 % and 7.8 % are close to it. Dropping
+the feedforward while keeping world regulation gives 32.9 % at 1 Hz, so it is
+genuinely the combination and not either alone.
+
+3 Hz is the exception, and it is worth not papering over: the product predicts
+about 3 % and the measurement is 52.1 %, worse than `base_link` alone. At
+18.8 rad/s the loop's own lag has turned the extra feedback into a liability -
+the sensitivity function peaks above one and the correction arrives out of
+phase. The arm's joint servos sit at 28 to 44 rad/s, so 3 Hz is not far below
+where they stop following either.
+
+The default is true because the base disturbance this machine actually has is
+near DC, where world regulation is at its best and `base_link` regulation
+rejects nothing at all. Measured with nothing driving the gantry: the base sinks
+at **18.3 um/s**, and with world regulation the arm rises in `base_link` at
+14 um/s to hold its world point, so the `base_link` error grows while the tool
+stays where it was put. In `base_link` regulation that error would read zero and
+the tool would sink with the base. If what you care about is above a couple of
+hertz, set it false and rely on the feedforward.
+
 ### 4.5 Tuning
 
 | File | What |

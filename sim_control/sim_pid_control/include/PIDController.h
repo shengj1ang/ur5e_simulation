@@ -70,6 +70,17 @@ protected:
   // equilibrium orientation of the coupling spring
   Quaterniond equilibrium_orientation_;
 
+  // The same equilibrium carried into the world frame at the moment it was
+  // received, which is what regulate_in_world_ regulates against. See
+  // latch_equilibrium_in_world() and compute_pid().
+  bool regulate_in_world_;
+  Vector3d equilibrium_world_position_;
+  Quaterniond equilibrium_world_orientation_;
+  bool equilibrium_world_valid_;
+  // True once /base_pose_ground_truth has been heard. Without it there is no
+  // base pose to carry anything into world with.
+  bool have_base_state_;
+
   // MANIPULATOR DYNAMICS, from sim_cartesian_dynamics_controller
   Matrix6d op_inertia_;      // Lambda
   Vector6d op_coriolis_;     // mu
@@ -159,6 +170,8 @@ protected:
   void presuppose_callback(const geometry_msgs::TwistConstPtr msg);
   void ee_dynamics_callback(
       const sim_cartesian_velocity_control::OperationalSpaceDynamicsConstPtr msg);
+  /** \brief Carry the current equilibrium into the world frame and keep it */
+  void latch_equilibrium_in_world();
   /** \brief Whether the last dynamics message can be used this cycle */
   bool dynamics_usable() const;
   void now_equilibrium_callback(const geometry_msgs::PoseStampedConstPtr msg);
@@ -182,6 +195,7 @@ public:
                 std::vector<double> A_inertia,
                 std::vector<double> A_coriolis,
                 std::vector<double> A_gravity,
+                bool regulate_in_world,
                 std::string topic_ee_dynamics,
                 std::vector<double> workspace_limits,
                 double arm_max_vel,
