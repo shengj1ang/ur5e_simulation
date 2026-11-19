@@ -8,7 +8,7 @@
 #include <hardware_interface/joint_command_interface.h>
 #include <controller_interface/controller.h>
 #include <kdl/chainiksolvervel_pinv.hpp>
-#include <kdl/chainiksolvervel_pinv_givens.hpp>
+#include <kdl/chainiksolvervel_wdls.hpp>
 #include <kdl/chainfksolvervel_recursive.hpp>
 #include <kdl/chainfksolverpos_recursive.hpp>
 #include "sim_cartesian_velocity_control/kinematic_chain_controller_base.h"
@@ -66,6 +66,11 @@ public:
    */
   virtual void writeVelocityCommands(const ros::Duration& period) = 0;
 
+  /** \brief Scale q_dt_cmd_ down uniformly when its norm exceeds
+   * max_joint_velocity_, so that the direction of the motion is preserved.
+   */
+  void limitJointVelocities();
+
 protected:
   ros::Subscriber sub_command_; // Interface to external commands
 
@@ -78,6 +83,13 @@ protected:
   KDL::JntArray q_cmd_;
 
   boost::shared_ptr<KDL::ChainIkSolverVel> ik_vel_solver_;
+
+  // Damped least squares parameters of the IK solver, plus a hard cap on the
+  // joint velocity it returns. See the comment on init() in the .cpp for the
+  // measurements the defaults come from.
+  double ik_sigma_min_;         // singular value below which damping starts
+  double ik_lambda_;            // damping factor at the singularity
+  double max_joint_velocity_;   // rad/s, on the norm of q_dt_cmd_; <=0 disables
 
   boost::shared_ptr<realtime_tools::RealtimePublisher<nav_msgs::Odometry> > realtime_pub_;
 

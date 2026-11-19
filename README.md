@@ -261,9 +261,11 @@ Two things to know:
   rosrun controller_manager controller_manager stop arm_joint_controller
   ```
 
-  `roslaunch sim_bringup init_pose_start_controllers.launch` does both steps for
-  you: it sets the arm to the pose in `sim_bringup/config/initial_pose.yaml` and
-  then switches from `arm_joint_controller` to the Cartesian controller.
+  `roslaunch sim_bringup init_pose_start_controllers.launch` is meant to do both
+  steps for you — set the arm to the pose in
+  `sim_bringup/config/initial_pose.yaml`, then switch from
+  `arm_joint_controller` to the Cartesian controller. Only the switch actually
+  happens; the pose part is a no-op (§6).
 
 Topics:
 
@@ -355,37 +357,81 @@ The same problem solved with k-means instead.
   subscribes to it for the mobile base of the robot it was originally written for.
   This model has a fixed gantry instead, so the base pose it uses stays at zero.
 
-* **`init_pose_start_controllers.launch` does not actually set the pose.** It
-  calls `/gazebo/set_model_configuration`, the service reports `success: True`,
-  and the arm does not move. `arm_joint_controller` is still running at that
-  moment and holds a position setpoint of its own, so the first physics step
-  after `unpause_physics` writes that setpoint and snaps the arm back. Measured:
-  arm at the SRDF `init` pose, `initial_pose.yaml` asking for
-  `elbow_joint: 0.0`, arm still at `elbow_joint 1.5700` afterwards. Only the
-  controller switch in that script has an effect. To place the arm, send a
-  trajectory to `arm_joint_controller` and switch afterwards (docs/WORKFLOW.md
-  §5), or stop the trajectory controller before the teleport.
+* **Nothing in the bringup can set the arm's startup pose.** Two mechanisms try
+  to and neither works, so the arm always comes up at the URDF's own zero pose,
+  fully extended, which is the elbow singularity.
 
-  It also takes the arm away from MoveIt, which is what it is for — it switches
-  from `arm_joint_controller` to the Cartesian velocity controller — but MoveIt
-  execution stops working until you switch back
-  (`controller_manager start arm_joint_controller`).
+  `init_pose_start_controllers.launch` calls `/gazebo/set_model_configuration`,
+  the service reports `success: True`, and the arm does not move. Measured: arm
+  at the SRDF `init` pose, `initial_pose.yaml` asking for `elbow_joint: 0.0`,
+  arm still at `elbow_joint 1.5700` afterwards. Only the controller switch in
+  that script has an effect.
 
-* **The Cartesian IK is undamped and the default startup pose is singular.**
-  `cartesian_velocity_controller` solves with `KDL::ChainIkSolverVel_pinv_givens`,
-  a plain pseudo-inverse with no damping. The spawner in
-  `with_moveit_new.launch` passes `-J` 0 for all six arm joints, and
-  `initial_pose.yaml` also asks for `elbow_joint: 0.0`; both are the fully
-  extended arm, which is the elbow singularity, where that pseudo-inverse is
-  ill-conditioned. Commanding 0.02 m/s along x from there produced joint
-  velocities big enough to fling the unactuated gantry (`y_joint` 0.77 m and
-  `r_joint` 25 rad within two seconds) and `ee_state` twists of 16 m/s, while
-  the end effector itself barely moved. From a well-conditioned pose — the SRDF
-  `init` state, `elbow_joint` 1.57 — the same commands track to 100.0 % with no
-  measurable cross-axis error. So place the arm away from full extension before
-  handing over to these controllers, and expect to want a damped solver
-  (`ChainIkSolverVel_wdls`) or a cap on the joint velocity norm before it is
-  safe to drive near a singularity.
+  The `-J <joint> <value>` arguments the spawner passes in
+  `with_moveit_new.launch` are a no-op as well. That is easy to miss, because
+  the file asks for 0 on all six arm joints, which is where the arm would be
+  anyway. Measured by asking for something else: spawning with
+  `-J shoulder_lift_joint 1.57 -J elbow_joint 1.57 -J wrist_2_joint 1.57
+  -J wrist_3_joint 1.57` leaves every one of those joints at 0.000.
+
+  Both have the same cause as the behaviour documented in
+  `cartesian_velocity_controller.cpp`: `gazebo_ros_control`'s
+  `DefaultRobotHWSim` keeps a position command for every joint of a
+  `PositionJointInterface` and writes it to Gazebo every cycle, whether or not
+  any controller is running (this model sets no
+  `/gazebo_ros_control/pid_gains`, so that write is kinematic). Whatever that
+  command holds wins over any teleport.
+
+  To place the arm, drive it there with a controller: send a trajectory to
+  `arm_joint_controller` and switch afterwards (docs/WORKFLOW.md §5).
+
+  `init_pose_start_controllers.launch` also takes the arm away from MoveIt,
+  which is what it is for — it switches from `arm_joint_controller` to the
+  Cartesian velocity controller — but MoveIt execution stops working until you
+  switch back (`controller_manager start arm_joint_controller`).
+
+* **The Cartesian IK is damped now; it used not to be, and the arm still starts
+  at a singularity.** `cartesian_velocity_controller` solves with
+  `KDL::ChainIkSolverVel_wdls` (damped least squares). It used to use
+  `KDL::ChainIkSolverVel_pinv_givens`, a plain pseudo-inverse, and combined with
+  the startup pose above that was destructive: commanding 0.02 m/s along x from
+  the fully extended arm asked for a joint velocity of norm 1.84 rad/s — a gain
+  of 92 per second — which flung the unactuated gantry (`y_joint` 1.82 m,
+  `r_joint` 15.6 rad, `ee_state` reporting up to 105 m/s) and dragged the end
+  effector 0.76 m in the wrong direction.
+
+  With damping, the same command from the same pose tracks x at 0.0200 m/s
+  exactly while the gantry joints stay under 1 mm and 0.001 rad, until the arm
+  runs out of reach and the solution degrades smoothly instead of exploding. At
+  a well-conditioned pose (SRDF `init`) damped and undamped are the same to the
+  measurement: both track at 100.0 % with dy and dz of 0.0000 m.
+
+  Three parameters control this, in `sim_vel_controller.yaml` and
+  `controllers.yaml`. `ik_sigma_min` (0.05) is the singular value at which
+  damping starts; KDL's own default for it is 1e-5, far below anything this
+  chain reaches, so damping would never engage and the value has to be chosen
+  for the robot. `ik_lambda` (0.2) is the damping factor. `max_joint_velocity`
+  (1.0 rad/s) caps the norm of the solution and is an unconditional backstop
+  that the other two keep it from reaching. The controller now also warns,
+  throttled, when it is solving near a singularity, which it used to do
+  silently. The measured singular values behind these defaults are in the
+  comment on `init()` in `cartesian_velocity_controller.cpp`.
+
+* **The joint velocities Gazebo reports are not usable, and `ee_state`'s twist
+  inherits that.** With the arm held still by the position interface,
+  `/joint_states` reports `shoulder_lift_joint` at a mean of 0.0417 rad/s while
+  its position changes by 0.00017 rad over 2.2 s. The joint is not moving. The
+  number is not noise either: it comes back bit-identical (0.041683) across
+  separate runs and across different poses. `ee_state` computes its twist from
+  these velocities through the forward kinematics, so it reports about
+  -0.037 m/s in z while the pose it publishes in the same message is constant
+  to four decimals.
+
+  The pose half of `ee_state` is trustworthy, the twist half is not. Anything
+  that needs the end-effector velocity — the derivative term in
+  `sim_pid_control`, and any dynamics model that wants q̇ — should differentiate
+  the reported position instead, unless the measurement is fixed at the
+  hardware interface.
 
 * **Parallel builds used to fail** with
   `mission_mode/mode_switch.h: No such file or directory`. The four executables in

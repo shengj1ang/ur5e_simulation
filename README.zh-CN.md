@@ -246,7 +246,7 @@ roslaunch sim_admittance_control admittance_controller.launch
   ```
 
   `roslaunch sim_bringup init_pose_start_controllers.launch` 会把这两步一起做掉：
-  先把臂摆到 `sim_bringup/config/initial_pose.yaml` 里的姿态，再从
+  本意是先把臂摆到 `sim_bringup/config/initial_pose.yaml` 里的姿态，再从
   `arm_joint_controller` 切到笛卡尔控制器。
 
 相关话题：
@@ -336,29 +336,63 @@ roslaunch sim_admittance_control admittance_controller.launch
   是因为它原本写给一台带移动底盘的机器人。本模型是固定龙门，所以它用到的底盘位姿
   一直保持为零。
 
-* **`init_pose_start_controllers.launch` 其实没有把位姿设上去。** 它调
-  `/gazebo/set_model_configuration`，服务返回 `success: True`，而机械臂并没有动。
-  调用的那一刻 `arm_joint_controller` 还在运行，它持有自己的位置设定点，于是
-  `unpause_physics` 之后的第一个物理步就把那个设定点写下去，把机械臂弹回原处。实测：
-  机械臂停在 SRDF 的 `init` 位姿，`initial_pose.yaml` 要求 `elbow_joint: 0.0`，跑完之后
-  机械臂仍然在 `elbow_joint 1.5700`。这个脚本里真正生效的只有控制器切换那一步。要摆位，
-  先给 `arm_joint_controller` 发一条轨迹再切（见 docs/WORKFLOW.md §5），或者在传送之前
-  先把轨迹控制器停掉。
+* **bringup 里没有任何一种办法能设定机械臂的启动位姿。** 有两处尝试去设，两处都无效，
+  于是机械臂每次都停在 URDF 自己的零位——完全伸直，也就是肘部奇异位形。
 
-  它同时会把臂从 MoveIt 手里拿走——这正是它的用途，从 `arm_joint_controller` 切到笛卡尔
-  速度控制器——但在你切回去之前（`controller_manager start arm_joint_controller`），
-  MoveIt 的执行功能是不可用的。
+  `init_pose_start_controllers.launch` 调 `/gazebo/set_model_configuration`，服务返回
+  `success: True`，而机械臂并没有动。实测：机械臂停在 SRDF 的 `init` 位姿，
+  `initial_pose.yaml` 要求 `elbow_joint: 0.0`，跑完之后机械臂仍然在 `elbow_joint 1.5700`。
+  这个脚本里真正生效的只有控制器切换那一步。
 
-* **笛卡尔 IK 没有阻尼，而默认启动位姿恰好是奇异的。**
-  `cartesian_velocity_controller` 用的是 `KDL::ChainIkSolverVel_pinv_givens`，一个不带
-  阻尼的纯伪逆。`with_moveit_new.launch` 里的 spawner 给六个臂关节都传了 `-J` 0，
-  `initial_pose.yaml` 要的也是 `elbow_joint: 0.0`；两者都是机械臂完全伸直，也就是肘部
-  奇异位形，伪逆在那里是病态的。从那个位形上给 x 方向 0.02 m/s，解出的关节速度大到
-  足以把没有控制器的龙门甩出去（两秒内 `y_joint` 0.77 m、`r_joint` 25 rad），
-  `ee_state` 报出 16 m/s 的速度，而末端本身几乎没动。换到一个条件良好的位姿——SRDF 的
-  `init` 状态，`elbow_joint` 1.57——同样的指令跟踪率 100.0%，跨轴误差测不出来。所以在
-  交给这些控制器之前要把机械臂摆离完全伸直的位形；要想在奇异点附近也能安全驱动，
-  大概需要换成带阻尼的解算器（`ChainIkSolverVel_wdls`）或者给关节速度范数加上限。
+  `with_moveit_new.launch` 里 spawner 传的 `-J <关节> <值>` 同样是空操作。这一点很容易
+  看漏，因为那个文件给六个臂关节要的都是 0，而机械臂本来就在 0。换个值就看得出来了：
+  用 `-J shoulder_lift_joint 1.57 -J elbow_joint 1.57 -J wrist_2_joint 1.57
+  -J wrist_3_joint 1.57` 启动，这几个关节实测全是 0.000。
+
+  两者的成因，和 `cartesian_velocity_controller.cpp` 里记下的那条是同一个：
+  `gazebo_ros_control` 的 `DefaultRobotHWSim` 为 `PositionJointInterface` 的每个关节
+  持有一个位置指令，并且每个周期都把它写进 Gazebo——不管有没有控制器在运行（本模型没有
+  配 `/gazebo_ros_control/pid_gains`，所以这个写入是运动学式的）。那个指令里存着什么，
+  什么就压过任何传送。
+
+  要摆位，只能用控制器把它开过去：给 `arm_joint_controller` 发一条轨迹，之后再切
+  （见 docs/WORKFLOW.md §5）。
+
+  `init_pose_start_controllers.launch` 同时会把臂从 MoveIt 手里拿走——这正是它的用途，
+  从 `arm_joint_controller` 切到笛卡尔速度控制器——但在你切回去之前
+  （`controller_manager start arm_joint_controller`），MoveIt 的执行功能是不可用的。
+
+* **笛卡尔 IK 现在带阻尼了；以前不带，而且机械臂启动时仍然在奇异点上。**
+  `cartesian_velocity_controller` 现在用 `KDL::ChainIkSolverVel_wdls`（阻尼最小二乘）。
+  它以前用的是 `KDL::ChainIkSolverVel_pinv_givens`，一个不带阻尼的纯伪逆；配上上面那条
+  说的启动位姿，后果是破坏性的：从完全伸直的位形给 x 方向 0.02 m/s，解出的关节速度范数
+  是 1.84 rad/s——任务空间到关节空间放大了 92 倍每秒——足以把没有控制器的龙门甩出去
+  （`y_joint` 1.82 m、`r_joint` 15.6 rad，`ee_state` 报到 105 m/s），同时把末端朝反方向
+  拖了 0.76 m。
+
+  加上阻尼之后，同一个位形、同一条指令，x 方向跟踪率正好 0.0200 m/s，龙门各关节保持在
+  1 mm 和 0.001 rad 以内；一直到机械臂够不着了，解也是平滑地退化而不是发散。在条件良好的
+  位姿上（SRDF 的 `init`），带阻尼和不带阻尼测不出区别：两者跟踪率都是 100.0%，dy 和 dz
+  都是 0.0000 m。
+
+  有三个参数控制这件事，在 `sim_vel_controller.yaml` 和 `controllers.yaml` 里。
+  `ik_sigma_min`（0.05）是阻尼开始介入的奇异值；KDL 自己的默认值是 1e-5，远低于这条链
+  实际会达到的任何值，照搬的话阻尼永远不会启动，所以这个值必须按机器人来选。
+  `ik_lambda`（0.2）是阻尼系数。`max_joint_velocity`（1.0 rad/s）给解的范数封顶，是一道
+  无条件的兜底——有前两个参数在，正常情况下够不到它。控制器现在还会在靠近奇异点求解时
+  发出（限频的）警告，这件事以前是悄无声息的。这些默认值背后实测的奇异值，记在
+  `cartesian_velocity_controller.cpp` 中 `init()` 的注释里。
+
+* **Gazebo 报出来的关节速度不能用，`ee_state` 的 twist 也跟着不能用。** 机械臂被位置接口
+  稳稳按住不动时，`/joint_states` 报 `shoulder_lift_joint` 的平均速度是 0.0417 rad/s，
+  而它的位置在 2.2 秒里只变了 0.00017 rad——关节根本没动。这个数也不是噪声：它在不同的
+  运行、不同的位姿下逐位相同（0.041683）。`ee_state` 的 twist 是用这些速度过一遍正运动学
+  算出来的，所以它会报出 z 方向约 -0.037 m/s，而同一条消息里发出来的位姿小数点后四位
+  纹丝不动。
+
+  `ee_state` 的位姿部分是可信的，twist 部分不可信。任何需要末端速度的地方——
+  `sim_pid_control` 里的微分项，以及后面任何需要 q̇ 的动力学模型——都应该去对报出来的
+  位置做差分，除非这个测量在硬件接口那一层被修好。
 
 * **并行编译以前会失败**，报
   `mission_mode/mode_switch.h: No such file or directory`。现在

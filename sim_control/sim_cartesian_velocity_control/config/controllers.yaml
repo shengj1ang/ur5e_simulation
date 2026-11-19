@@ -5,6 +5,14 @@
     publish_rate: 125
     root_name: base_link
     tip_name: ee_link
+    # Damped least squares inverse velocity kinematics. ik_sigma_min is the
+    # singular value at which damping starts - see the comment on init() in
+    # cartesian_velocity_controller.cpp for the measurements these come from.
+    # max_joint_velocity caps the norm of the joint velocity the solver
+    # returns; <=0 disables it.
+    ik_sigma_min: 0.05
+    ik_lambda: 0.2
+    max_joint_velocity: 1.0
 
   # Controller for gazebo (velocity interface on top of a position interface)
   cartesian_velocity_controller_sim:
@@ -12,6 +20,14 @@
     publish_rate: 125
     root_name: base_link
     tip_name: ee_link
+    # Damped least squares inverse velocity kinematics. ik_sigma_min is the
+    # singular value at which damping starts - see the comment on init() in
+    # cartesian_velocity_controller.cpp for the measurements these come from.
+    # max_joint_velocity caps the norm of the joint velocity the solver
+    # returns; <=0 disables it.
+    ik_sigma_min: 0.05
+    ik_lambda: 0.2
+    max_joint_velocity: 1.0
 
   # Cartesian state publisher
   cartesian_state_controller:

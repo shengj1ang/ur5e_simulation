@@ -2,18 +2,88 @@
 #include "sim_cartesian_velocity_control/kinematic_chain_controller_base.h"
 #include "sim_cartesian_velocity_control/cartesian_velocity_controller.h"
 #include "kdl_conversions/kdl_msg.h"
+#include <cmath>
 
 namespace controller_interface
 {
 /** \brief Initialize the kinematic chain for kinematics-based computation.
  *
+ * The inverse velocity kinematics is solved by damped least squares
+ * (ChainIkSolverVel_wdls), not by the undamped pseudo-inverse this used to
+ * use (ChainIkSolverVel_pinv_givens). Undamped, a command given near a
+ * singularity is inverted through a vanishing singular value and comes back as
+ * an arbitrarily large joint velocity.
+ *
+ * That is not a corner case here: the arm always comes up fully extended, which
+ * is the elbow singularity, and nothing in the bringup can place it anywhere
+ * else - the spawner's -J arguments and /gazebo/set_model_configuration are
+ * both overwritten by the hardware interface (see the README's known issues).
+ * Measured on this chain at that pose, for a 0.02 m/s command along x, the
+ * Jacobian's singular values are
+ *   2.105  1.565  0.644  0.532  0.0725  0.0000
+ * and the undamped solver returns a joint velocity of norm 1.84 rad/s - a gain
+ * of 92 per second from task space to joint space. In Gazebo that lands on a
+ * position interface as roughly a 12 mm jump per cycle, whose reaction flung
+ * the unactuated gantry (y_joint 1.82 m and r_joint 15.6 rad over a five second
+ * command, with ee_state reporting speeds up to 105 m/s) and dragged the end
+ * effector 0.76 m in the direction opposite to the one commanded.
+ *
+ * KDL's wdls damps the smallest singular values, and its 'eps' constructor
+ * argument - ik_sigma_min here - is the singular value at which it starts.
+ * KDL's own default of 1e-5 is far below anything this chain reaches in
+ * practice, so damping would never engage; the value has to be chosen for the
+ * robot. Measured, same command, norm of the returned joint velocity, and the
+ * twist it actually achieves:
+ *
+ *   pose                     sigma_min   undamped   sigma_min=0.05   achieved
+ *   fully extended (spawn)     0.0000     1.84        0.27           0.0200 (exact)
+ *   near-singular elbow 0.05   0.0083     0.068       0.035          0.0200 (exact)
+ *   near-singular elbow 0.20   0.0329     0.067       0.035          0.0198
+ *   srdf 'init' pose           0.2140     0.0666      0.0666         0.0200 (exact)
+ *
+ * So 0.05 sits above everything the singular poses produce and below the
+ * smallest singular value of a well conditioned pose: it removes the
+ * seven-fold blow-up at the spawn pose without changing the solution at a
+ * working pose at all. Raising it to 0.3 starts costing tracking everywhere
+ * (0.0200 -> 0.0180 at the 'init' pose), which is why it is not higher.
+ *
+ * ik_lambda is the damping applied once below that threshold. It only has a
+ * visible effect when the threshold is set high enough to be active at a well
+ * conditioned pose, so with the default ik_sigma_min it mostly does not
+ * matter; it is a parameter so that the trade-off can be made from a launch
+ * file rather than from this source file.
+ *
+ * max_joint_velocity is a separate, unconditional backstop: whatever the
+ * solver returns is scaled down uniformly if its norm exceeds it. With the
+ * defaults above nothing reaches it (0.27 rad/s at the worst pose measured),
+ * so it does not shape normal motion - it only bounds the damage if a pose or
+ * a command is found that the damping does not cover.
+ *
+ * Verified in Gazebo, same 0.02 m/s command along x. From the spawn pose the
+ * end effector now tracks at 0.0200 m/s while the gantry joints stay under
+ * 1 mm and 0.001 rad, until the arm runs out of reach and the solution
+ * degrades smoothly. From the SRDF 'init' pose, reached by driving the arm
+ * there with arm_joint_controller first, damped and undamped are the same to
+ * the measurement: both 0.0200 m/s with dy and dz of 0.0000 m.
  */
 template<typename T>
 bool CartesianVelocityControllerBase<T>::init(T *robot, ros::NodeHandle &n) 
 {
   // KDL
   KinematicChainControllerBase<T>::init(robot, n);
-  ik_vel_solver_.reset(new KDL::ChainIkSolverVel_pinv_givens(this->kdl_chain_));
+
+  n.param("ik_sigma_min", ik_sigma_min_, 0.05);
+  n.param("ik_lambda", ik_lambda_, 0.2);
+  n.param("max_joint_velocity", max_joint_velocity_, 1.0);
+
+  // 'eps' of the wdls solver is the singular value threshold, ik_sigma_min.
+  KDL::ChainIkSolverVel_wdls *wdls =
+      new KDL::ChainIkSolverVel_wdls(this->kdl_chain_, ik_sigma_min_);
+  wdls->setLambda(ik_lambda_);
+  ik_vel_solver_.reset(wdls);
+  ROS_INFO("Cartesian velocity controller: damped IK, sigma_min %.4f, lambda "
+           "%.4f, joint velocity capped at %.3f rad/s",
+           ik_sigma_min_, ik_lambda_, max_joint_velocity_);
   fk_vel_solver_.reset(new KDL::ChainFkSolverVel_recursive(this->kdl_chain_));
   fk_pos_solver_.reset(new KDL::ChainFkSolverPos_recursive(this->kdl_chain_));
 
@@ -74,8 +144,24 @@ void CartesianVelocityControllerBase<T>::update(const ros::Time& time, const ros
     this->joint_msr_.qdot(i)      = this->joint_handles_[i].getVelocity();
   }
 
-  // Compute inverse kinematics velocity solver
-  ik_vel_solver_->CartToJnt(this->joint_msr_.q, x_dt_des_, q_dt_cmd_);
+  // Compute inverse kinematics velocity solver. A positive return value is
+  // E_CONVERGE_PINV_SINGULAR: the solution is usable but damped, i.e. the arm
+  // is at or near a singularity. That used to happen silently.
+  int ik_ret = ik_vel_solver_->CartToJnt(this->joint_msr_.q, x_dt_des_, q_dt_cmd_);
+  if (ik_ret < 0)
+  {
+    ROS_WARN_THROTTLE(5.0, "Cartesian velocity controller: IK solver failed "
+                           "(%d), commanding zero joint velocity", ik_ret);
+    KDL::SetToZero(q_dt_cmd_);
+  }
+  else if (ik_ret > 0)
+  {
+    ROS_WARN_THROTTLE(10.0, "Cartesian velocity controller: at or near a "
+                            "singularity, the IK solution is damped and the "
+                            "end effector will not follow the command exactly");
+  }
+
+  limitJointVelocities();
   writeVelocityCommands(period);
 
   // Forward kinematics
@@ -98,6 +184,35 @@ void CartesianVelocityControllerBase<T>::update(const ros::Time& time, const ros
 
       realtime_pub_->unlockAndPublish();
     }
+  }
+}
+
+/** \brief Scale the commanded joint velocity down uniformly if its norm
+ * exceeds max_joint_velocity_
+ *
+ * Scaling the whole vector keeps the direction of the motion, so the end
+ * effector still travels along the commanded path, only slower. Zeroing or
+ * clamping single joints instead would send it somewhere else entirely.
+ */
+template<typename T>
+void CartesianVelocityControllerBase<T>::limitJointVelocities()
+{
+  if (max_joint_velocity_ <= 0.0)   // disabled
+    return;
+
+  double norm = 0.0;
+  for (unsigned int i = 0; i < q_dt_cmd_.rows(); i++)
+    norm += q_dt_cmd_(i) * q_dt_cmd_(i);
+  norm = std::sqrt(norm);
+
+  if (norm > max_joint_velocity_)
+  {
+    const double scale = max_joint_velocity_ / norm;
+    for (unsigned int i = 0; i < q_dt_cmd_.rows(); i++)
+      q_dt_cmd_(i) *= scale;
+    ROS_WARN_THROTTLE(5.0, "Cartesian velocity controller: joint velocity "
+                           "%.3f rad/s over the %.3f rad/s cap, scaled by %.3f",
+                      norm, max_joint_velocity_, scale);
   }
 }
 

@@ -166,6 +166,21 @@ rosparam get /K_p
 rosparam get /mass_arm
 ```
 
+### Change how the Cartesian IK behaves near a singularity
+
+`sim_control/sim_pid_control/config/sim_vel_controller.yaml` (and its identical
+copies under `sim_admittance_control` and `sim_cartesian_velocity_control`), in both
+`sim_cartesian_velocity_controller` blocks:
+
+| Parameter | Default | What it does |
+|---|---|---|
+| `ik_sigma_min` | 0.05 | The singular value at which damping starts. Higher damps earlier and more often, at the cost of tracking everywhere; 0.3 already costs 10 % of the commanded speed at a well-conditioned pose. 0 disables damping and gives you the old undamped pseudo-inverse. |
+| `ik_lambda` | 0.2 | How hard it damps once below that threshold. |
+| `max_joint_velocity` | 1.0 | Hard cap on the norm of the joint velocity, applied after the solver. `<=0` disables it. |
+
+No rebuild; re-sync and restart. The controller prints the three values when it
+initialises, and warns (throttled) whenever it is solving near a singularity.
+
 ### Change the scene
 
 The world is chosen in the bringup launch file. `with_moveit_new.launch` loads
@@ -182,7 +197,10 @@ database — `puzzle.world` fails exactly this way.
 ### Change where or how the robot is spawned
 
 In `with_moveit_new.launch`, the `urdf_spawner` node's `args`: `-x -y -z` place the
-model, `-J <joint> <value>` sets a starting joint angle. `-model sim` is the name
+model. `-J <joint> <value>` is supposed to set a starting joint angle, but it has no
+effect here — `gazebo_ros_control` overwrites it on the first physics step, so the
+arm always comes up at the URDF zero pose (README §6). To start somewhere else, send
+a trajectory to `arm_joint_controller` after bringup (§5 below). `-model sim` is the name
 Gazebo knows the robot by — if you change it, change it in
 `sim_bringup/scripts/init_pose_start_controllers.py` too (or pass
 `_model_name:=...`), because that script addresses the model by name.
@@ -316,8 +334,10 @@ rosrun controller_manager controller_manager stop arm_joint_controller
 rosrun controller_manager controller_manager start sim_cartesian_velocity_controller_sim
 ```
 
-`roslaunch sim_bringup init_pose_start_controllers.launch` does the pose and the
-switch in one go. Afterwards MoveIt cannot execute until you switch back:
+`roslaunch sim_bringup init_pose_start_controllers.launch` is meant to do the pose
+and the switch in one go, but only the switch works (README §6) — place the arm with
+a trajectory first if you need a particular pose. Afterwards MoveIt cannot execute
+until you switch back:
 
 ```bash
 rosrun controller_manager controller_manager stop sim_cartesian_velocity_controller_sim
@@ -434,6 +454,9 @@ Two traps worth knowing:
 | Gazebo dies at startup | `SVGA_VGPU10=0` is missing in this shell. |
 | `Unable to find uri[model://...]` | The world wants a model from Gazebo's online database. |
 | MoveIt plans but nothing moves | `arm_joint_controller` is stopped, or something else holds the joints. |
+| The arm thrashes and the gantry flies off on a Cartesian command | The arm is at or near a singularity and `ik_sigma_min` is too low for it. Check the controller's throttled singularity warning. |
+| `-J` in the spawner args changes nothing | It cannot; `gazebo_ros_control` overwrites it. Drive the arm with `arm_joint_controller` instead (README §6). |
+| `ee_state` reports a velocity while the arm is still | Gazebo's reported joint velocities are wrong under a position interface. The pose in that message is fine, the twist is not (README §6). |
 | `Connection refused` spam from XmlRpc | Relaunched before the previous `rosmaster` finished dying. |
 | `ROS_DISTRO: unbound variable` | `set -u` in a script that sources ROS. Lift `nounset` around the `source`. |
 | The node's log file is empty but it works | Python buffers stdout when redirected. Read `~/.ros/log/latest/rosout.log`. |
