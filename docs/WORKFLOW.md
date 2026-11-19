@@ -182,6 +182,16 @@ copies under `sim_admittance_control` and `sim_cartesian_velocity_control`), in 
 No rebuild; re-sync and restart. The controller prints the three values when it
 initialises, and warns (throttled) whenever it is solving near a singularity.
 
+### Change what the dynamics controller models
+
+`sim_cartesian_dynamics_controller` in the same yaml files. `sigma_min` sets when
+it marks its messages invalid, `pinv_rcond` the relative tolerance of the
+pseudo-inverse of `J M^-1 J^T`, `gravity` the gravity vector in `root_name`, and
+`include_tip_payload` whether to fold everything bolted past `tip_name` into the
+model — leave that on, it is worth 29 % of the gravity torque here (README §4.4).
+Changing `tip_name` moves where the dynamics are evaluated and changes what counts
+as payload. No rebuild; re-sync and restart.
+
 ### Change the scene
 
 The world is chosen in the bringup launch file. `with_moveit_new.launch` loads
@@ -458,6 +468,7 @@ Two traps worth knowing:
 | The arm thrashes and the gantry flies off on a Cartesian command | The arm is at or near a singularity and `ik_sigma_min` is too low for it. Check the controller's throttled singularity warning. |
 | `-J` in the spawner args changes nothing | It cannot; `gazebo_ros_control` overwrites it. Drive the arm with `arm_joint_controller` instead (README §6). |
 | `/joint_states` shows a velocity while the arm is still | Gazebo's reported joint velocities are wrong under a position interface (README §6). `ee_state`'s twist no longer uses them; `/joint_states` still does. |
+| The whole plugin library fails to load, `undefined symbol: ..._6HYBRIDE` | KDL declares some `static const int` members (`ChainJntToJacDotSolver::HYBRID` and friends) without defining them. Binding a reference to one — which `setRepresentation(const int&)` and `setHybridRepresentation()` do — leaves the library undefined. Copy the value into a local first. |
 | The PID node never starts, no error | Its constructor blocks until TF `base_link` -> `ee_link` exists. Something has to publish it — `robot_state_publisher`, which full bringup starts and a cut-down rig may not. |
 | `Connection refused` spam from XmlRpc | Relaunched before the previous `rosmaster` finished dying. |
 | `ROS_DISTRO: unbound variable` | `set -u` in a script that sources ROS. Lift `nounset` around the `source`. |

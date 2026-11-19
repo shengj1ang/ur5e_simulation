@@ -60,6 +60,31 @@ sim_cartesian_state_controller:
     # kinematic_chain_controller_base.h. 0 or less turns the filter off.
     velocity_filter_cutoff: 30.0
 
+# Publishes the operational-space dynamics (task-space inertia, centrifugal and
+# Coriolis wrench, gravity wrench) on ee_dynamics, for a controller to use as a
+# feedforward. It only reads the joint states, so it can run at the same time
+# as whichever controller is driving the arm.
+sim_cartesian_dynamics_controller:
+  type: cartesian_controller/CartesianDynamicsController
+  publish_rate: 125
+  root_name: base_link
+  tip_name: ee_link
+  velocity_filter_cutoff: 30.0
+  # Below this smallest singular value of the Jacobian the messages are marked
+  # invalid. Same meaning as ik_sigma_min above.
+  sigma_min: 0.05
+  # Relative tolerance when inverting J M^-1 J^T. That matrix mixes linear and
+  # angular units, so the threshold has to be relative to its largest singular
+  # value rather than absolute.
+  pinv_rcond: 1.0e-6
+  # Fold everything rigidly attached beyond tip_name - here the coupler, the
+  # gripper and the camera, 0.767 kg - into the model. Leaving it out costs
+  # 29 % of the gravity torque at the working pose.
+  include_tip_payload: true
+  # Gravity in root_name. Valid here because every joint between world and
+  # base_link has rpy 0 and the only rotation is about z.
+  gravity: [0.0, 0.0, -9.81]
+
 #Publish wrench ----------------------------------
 force_torque_sensor_controller:
     type: force_torque_sensor_controller/ForceTorqueSensorController

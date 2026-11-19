@@ -255,12 +255,52 @@ roslaunch sim_admittance_control admittance_controller.launch
 |---|---|---|
 | `/sim_cartesian_velocity_controller_sim/command_cart_vel` | 输入 | 末端速度指令 |
 | `/sim_cartesian_velocity_controller_sim/ee_state` | 输出 | 末端当前状态 |
+| `/sim_cartesian_dynamics_controller/ee_dynamics` | 输出 | 操作空间惯量、科氏力和重力（见 4.4） |
 | `/ft_sensor/data` | 输入 | 导纳控制用的外部力/力矩 |
 
 插件使用的运动链是 `base_link` → `ee_link`，频率 125 Hz（见各控制包里的
 `sim_vel_controller.yaml`）。
 
-### 4.4 参数在哪里调
+### 4.4 操作空间动力学
+
+`sim_cartesian_dynamics_controller` 把机械臂的任务空间动力学发出来，好让控制器能把模型
+前馈出去，而不是只对误差作反应。它只读关节状态，不占用任何关节，因此可以和正在驱动机械臂
+的那个控制器同时运行：
+
+```bash
+rosrun controller_manager controller_manager spawn sim_cartesian_dynamics_controller
+rostopic echo /sim_cartesian_dynamics_controller/ee_dynamics
+```
+
+每条消息在它对应的位形下携带：
+
+| 字段 | 含义 |
+|---|---|
+| `inertia` | Λ = (J M⁻¹ Jᵀ)⁻¹，机械臂在末端呈现出来的惯量 |
+| `inertia_inv` | J M⁻¹ Jᵀ，在奇异点上它仍然有限，而 Λ 不存在 |
+| `coriolis` | μ = Λ (J M⁻¹ C q̇ − J̇ q̇) |
+| `gravity` | p = Λ J M⁻¹ G，把机械臂撑住所需的力旋量 |
+| `jacobian_sigma_min`、`inertia_rank`、`valid` | 这些数在这里是否有意义 |
+
+于是 `F = inertia · ẍ_desired + coriolis + gravity`。
+
+用之前有三件事要知道。
+
+**它是仿真的模型，不是真实 UR5e 的模型。** 这些量来自 Gazebo 正在积分的同一份 URDF，所以
+它和被仿真的对象严格一致。那份描述里连杆质量是厂家数据，但惯量张量是圆柱体近似。
+
+**它把末端上栓着的东西算进去了。** KDL 的链到 `ee_link` 就停了，耦合器、夹爪和相机那
+0.767 kg 全挂在它后面、一点也没算进去。在 SRDF 的 `init` 位姿上实测，把这段折进去之后：
+`shoulder_lift` 的重力力矩从 14.645 Nm 变成 18.848 Nm（+29%），末端等效质量从
+3.40/4.14/7.76 kg 变成 4.16/4.91/8.52 kg，重力力旋量从 36.9 N 变成 44.4 N。控制器会自己
+沿 URDF 走完末端之后的子树把它累加进来；`include_tip_payload: false` 可以关掉。
+
+**奇异点上 Λ 不存在，而机械臂恰好就从奇异点启动。** 在启动位姿上 J M⁻¹ Jᵀ 的秩是 5，消息
+带着 `valid: false`、`jacobian_sigma_min` 为 0.00000，`inertia` 是秩 5 的伪逆——有限、看着
+像那么回事、但并不是操作空间惯量。请先看 `valid`，不成立时退回到没有模型时的做法。在条件
+良好的位姿上，`inertia · inertia_inv` 与单位阵相差 3e-14，Λ 对称到 6e-16。
+
+### 4.5 参数在哪里调
 
 | 文件 | 内容 |
 |---|---|
@@ -268,6 +308,7 @@ roslaunch sim_admittance_control admittance_controller.launch
 | `sim_control/sim_admittance_control/config/admittance_params.yaml` | `mass_arm`、`damping_arm`、`stiffness_arm`、`equilibrium_point_spring`、`workspace_limits` |
 | `sim_planning/sim_moveit_config/config/sim_trajectory_control.yaml` | 轨迹控制器的容差和发布频率 |
 | `sim/sim_bringup/config/initial_pose.yaml` | 初始位姿辅助脚本用的关节值 |
+| `sim_control/*/config/sim_vel_controller.yaml` | `ik_sigma_min`/`ik_lambda`/`max_joint_velocity`、`velocity_filter_cutoff`，以及动力学控制器的 `sigma_min`/`pinv_rcond`/`include_tip_payload`/`gravity` |
 
 所有增益矩阵都是 6×6，按行优先展平成一个一维列表写的。
 

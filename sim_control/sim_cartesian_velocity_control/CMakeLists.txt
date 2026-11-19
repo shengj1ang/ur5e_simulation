@@ -16,6 +16,18 @@ find_package(catkin REQUIRED COMPONENTS
   kdl_parser
   kdl_conversions
   nav_msgs
+  std_msgs
+  message_generation
+)
+
+add_message_files(
+  FILES
+  OperationalSpaceDynamics.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
 )
 set(CMAKE_CXX_FLAGS "-O2 -O3 -std=c++11 -mtune=native -fPIC -Wall -Wno-deprecated-declarations")
 
@@ -23,6 +35,7 @@ set(CMAKE_CXX_FLAGS "-O2 -O3 -std=c++11 -mtune=native -fPIC -Wall -Wno-deprecate
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES sim_cartesian_velocity_control
+  CATKIN_DEPENDS message_runtime std_msgs
 )
 
 include_directories(include ${catkin_INCLUDE_DIRS})
@@ -36,8 +49,10 @@ add_library(${PROJECT_NAME}
   include/sim_cartesian_velocity_control/kinematic_chain_controller_base.h
   include/sim_cartesian_velocity_control/cartesian_velocity_controller.h
   include/sim_cartesian_velocity_control/cartesian_state_controller.h
+  include/sim_cartesian_velocity_control/cartesian_dynamics_controller.h
   src/cartesian_velocity_controller.cpp
   src/cartesian_state_controller.cpp
+  src/cartesian_dynamics_controller.cpp
 )
 
 add_dependencies(${PROJECT_NAME} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

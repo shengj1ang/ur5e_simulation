@@ -273,12 +273,61 @@ Topics:
 |---|---|---|
 | `/sim_cartesian_velocity_controller_sim/command_cart_vel` | in | commanded end-effector twist |
 | `/sim_cartesian_velocity_controller_sim/ee_state` | out | current end-effector state |
+| `/sim_cartesian_dynamics_controller/ee_dynamics` | out | operational-space inertia, Coriolis and gravity (§4.4) |
 | `/ft_sensor/data` | in | external wrench for the admittance controller |
 
 The kinematic chain used by the plugin is `base_link` → `ee_link` at 125 Hz
 (`sim_vel_controller.yaml` in each control package).
 
-### 4.4 Tuning
+### 4.4 Operational-space dynamics
+
+`sim_cartesian_dynamics_controller` publishes the arm's task-space dynamics so
+that a controller can feed the model forward instead of only reacting to error.
+It reads the joint states and nothing else, so it claims no joint and runs
+alongside whichever controller is driving the arm:
+
+```bash
+rosrun controller_manager controller_manager spawn sim_cartesian_dynamics_controller
+rostopic echo /sim_cartesian_dynamics_controller/ee_dynamics
+```
+
+Each message carries, at the configuration it is stamped for,
+
+| Field | Meaning |
+|---|---|
+| `inertia` | Λ = (J M⁻¹ Jᵀ)⁻¹, the inertia the arm presents at the end effector |
+| `inertia_inv` | J M⁻¹ Jᵀ, which stays finite at a singularity where Λ does not |
+| `coriolis` | μ = Λ (J M⁻¹ C q̇ − J̇ q̇) |
+| `gravity` | p = Λ J M⁻¹ G, the wrench that holds the arm up |
+| `jacobian_sigma_min`, `inertia_rank`, `valid` | whether the numbers mean anything here |
+
+so that `F = inertia · ẍ_desired + coriolis + gravity`.
+
+Three things are worth knowing before using it.
+
+**It is a model of the simulation, not of a UR5e.** The quantities come from
+the same URDF Gazebo integrates, so they match the simulated plant exactly.
+That description's link masses are the manufacturer's, but its inertia tensors
+are cylinder approximations.
+
+**It includes what is bolted to the end effector.** KDL's chain stops at
+`ee_link` and carries none of the 0.767 kg of coupler, gripper and camera that
+hang off it. Measured at the SRDF `init` pose, folding that in changes the
+gravity torque at `shoulder_lift` from 14.645 Nm to 18.848 Nm (+29 %), the
+apparent mass at the end effector from 3.40/4.14/7.76 kg to 4.16/4.91/8.52 kg,
+and the gravity wrench from 36.9 N to 44.4 N. The controller walks the URDF
+subtree past the tip and folds it in; `include_tip_payload: false` turns that
+off.
+
+**Λ does not exist at a singularity, and the arm starts at one.** At the spawn
+pose J M⁻¹ Jᵀ is rank 5 and the message comes out with `valid: false`, a
+`jacobian_sigma_min` of 0.00000 and an `inertia` that is the rank-5
+pseudo-inverse — finite, plausible-looking and not the operational-space
+inertia. Check `valid` and fall back to whatever you did without a model.
+At a well-conditioned pose `inertia · inertia_inv` differs from the identity by
+3e-14 and Λ is symmetric to 6e-16.
+
+### 4.5 Tuning
 
 | File | What |
 |---|---|
@@ -286,6 +335,7 @@ The kinematic chain used by the plugin is `base_link` → `ee_link` at 125 Hz
 | `sim_control/sim_admittance_control/config/admittance_params.yaml` | `mass_arm`, `damping_arm`, `stiffness_arm`, `equilibrium_point_spring`, `workspace_limits` |
 | `sim_planning/sim_moveit_config/config/sim_trajectory_control.yaml` | trajectory controller tolerances and publish rates |
 | `sim/sim_bringup/config/initial_pose.yaml` | joint values for the initial-pose helper |
+| `sim_control/*/config/sim_vel_controller.yaml` | `ik_sigma_min`/`ik_lambda`/`max_joint_velocity`, `velocity_filter_cutoff`, and the dynamics controller's `sigma_min`/`pinv_rcond`/`include_tip_payload`/`gravity` |
 
 All gain matrices are 6×6, written out row-major as a flat list.
 

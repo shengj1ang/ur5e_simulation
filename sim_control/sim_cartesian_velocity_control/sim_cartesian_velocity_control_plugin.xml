@@ -16,4 +16,10 @@
         Cartesian velocity control using a position interface. This is used in conjunction with Gazebo which, at the moment of writing this code, does not fully support a joint velocity interface.
     </description>
   </class>
+
+  <class name="cartesian_controller/CartesianDynamicsController" type="controller_interface::CartesianDynamicsController" base_class_type="controller_interface::ControllerBase">
+    <description>
+        Publishes the operational-space dynamics of the arm - the task-space inertia, the centrifugal and Coriolis wrench and the gravity wrench - for a controller to use as a feedforward. Reads the joint states only, so it runs alongside whichever controller is driving the arm.
+    </description>
+  </class>
 </library>
