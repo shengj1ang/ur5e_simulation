@@ -355,6 +355,68 @@ end — with `A_gravity` set to
 on every sample. With the dynamics forced invalid the term is dropped and the
 offset goes back to 0.006 mm, with a throttled warning.
 
+**What it does against a real base disturbance.** The arm is mounted on the
+gantry, so moving the gantry moves the arm's base while the arm holds its end
+effector somewhere. That is the disturbance `N_p` and `N_d` are written against,
+and `gantry_disturbance.launch` produces it on purpose:
+
+```bash
+roslaunch sim_bringup gantry_disturbance.launch axis:=y amplitude:=0.02 frequency:=1.0
+```
+
+It loads a velocity controller for the four gantry axes — nothing else in this
+repository drives them — and drives one sinusoidally, ramped in and out. The
+quantity to watch is the end effector in **world**, on `/ee_pose_ground_truth`:
+`ee_state` is in `base_link`, so the feedback loop cannot see any of this.
+
+Measured at the SRDF `init` pose with the joint PID gains on, y axis, 20 mm
+amplitude, peak-to-peak end-effector motion in world as a fraction of the base's
+(40.7 mm):
+
+| controller | 1 Hz | rejection |
+|---|---|---|
+| feedback only (`N_p` = `N_d` = 0) | 101.5 % | -1.5 % |
+| + kinematic feedforward (shipped default) | 72.5 % | 27.5 % |
+| + model inertia term (`A_inertia` = 0.01·I) | 104.3 % | -4.3 % |
+
+Three things to take from that.
+
+**The feedback alone does nothing at all**, and this is structural rather than a
+tuning problem. Its setpoint is a pose in `base_link`; the base moving does not
+change that pose, so there is no error to act on and the end effector rides the
+gantry one for one.
+
+**The kinematic feedforward works, and its rejection rises with frequency** —
+3.6 % at 0.3 Hz, 27.5 % at 1 Hz, 70.1 % at 3 Hz. That shape has the same cause:
+holding the end effector still in world means *moving* in `base_link`, which the
+`K_p` term opposes. With the plant an integrator, the arm's `base_link`
+displacement is `N_p·jw/(jw + K_p)` times the base's, which with `K_p` 7.7 gives
+0.23, 0.61 and 0.90 at those three frequencies — the same monotonic rise. The
+measured rejection is lower than that throughout, so there is further lag in the
+loop this estimate does not capture. The fix is not a larger `N_p`: it is to
+regulate against a target fixed in world rather than in `base_link`, so that the
+feedback helps instead of fighting.
+
+**The model inertia term, as written, makes it worse**, and the reason is worth
+being precise about rather than tuning around:
+
+* Its input is `a_ff`, the base acceleration carried to the end effector, which
+  the node forms by differencing a base twist that the p3d plugin already
+  obtained by differencing a pose. Multiplying that second derivative by Λ, 5 to
+  9 kg, puts the noise straight into a velocity command. With no disturbance at
+  all, end-effector jitter in world went from 0.006 mm peak-to-peak to
+  **6.850 mm** when the term was switched on.
+* Even without the noise the shape is wrong. The arm is commanded in velocity
+  and the command is integrated into a position, so a wrench admitted as a
+  velocity arrives as a position 90 degrees out of phase with the deflection it
+  was meant to cancel. If the model is to compensate the joint servos' finite
+  compliance, it belongs as a *position* feedforward where the integration
+  happens — in `cartesian_velocity_controller.cpp`, next to `q_cmd_` — not as a
+  velocity admittance one loop out.
+
+So the admittances stay at zero, now for a measured reason rather than an
+argued one.
+
 ### 4.5 Tuning
 
 | File | What |
@@ -364,6 +426,7 @@ offset goes back to 0.006 mm, with a throttled warning.
 | `sim_planning/sim_moveit_config/config/sim_trajectory_control.yaml` | trajectory controller tolerances and publish rates |
 | `sim/sim_bringup/config/initial_pose.yaml` | joint values for the initial-pose helper |
 | `sim/sim_bringup/config/gazebo_joint_pid_gains.yaml` | per-joint PID gains for gazebo_ros_control, i.e. how stiff the arm is (§6) |
+| `sim/sim_bringup/config/gantry_velocity_controller.yaml` | the only controller for the four gantry axes; used to inject a base disturbance (§4.4) |
 | `sim_control/*/config/sim_vel_controller.yaml` | `ik_sigma_min`/`ik_lambda`/`max_joint_velocity`, `velocity_filter_cutoff`, and the dynamics controller's `sigma_min`/`pinv_rcond`/`include_tip_payload`/`gravity` |
 
 All gain matrices are 6×6, written out row-major as a flat list.

@@ -1,0 +1,31 @@
+<launch>
+  <!-- Inject a base disturbance by driving one gantry axis sinusoidally.
+       Start this on top of a running bringup, with whichever arm controller you
+       want to test already running. It loads and starts a velocity controller
+       for the four gantry axes, which nothing else in this repository does, and
+       then runs the sinusoid.
+
+       The arm's feedback is in base_link and cannot see this; measure the end
+       effector in world on /ee_pose_ground_truth. -->
+
+  <arg name="axis"      default="y"    doc="x, y, z or r"/>
+  <arg name="amplitude" default="0.02" doc="peak excursion, m or rad"/>
+  <arg name="frequency" default="1.0"  doc="Hz"/>
+  <arg name="duration"  default="20.0" doc="s, 0 for no limit"/>
+  <arg name="ramp"      default="1.0"  doc="s, raised cosine in and out"/>
+
+  <rosparam file="$(find sim_bringup)/config/gantry_velocity_controller.yaml"
+            command="load"/>
+
+  <node name="gantry_controller_spawner" pkg="controller_manager" type="spawner"
+        respawn="false" output="screen" args="gantry_velocity_controller"/>
+
+  <node name="gantry_disturbance" pkg="sim_bringup" type="gantry_disturbance.py"
+        respawn="false" output="screen" required="true">
+    <param name="axis"      value="$(arg axis)"/>
+    <param name="amplitude" value="$(arg amplitude)"/>
+    <param name="frequency" value="$(arg frequency)"/>
+    <param name="duration"  value="$(arg duration)"/>
+    <param name="ramp"      value="$(arg ramp)"/>
+  </node>
+</launch>

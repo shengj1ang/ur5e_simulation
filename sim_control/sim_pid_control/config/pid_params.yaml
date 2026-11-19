@@ -114,10 +114,27 @@ integral_limit: 0.05
 # plant's behaviour for the better. What they are waiting on is joints with
 # dynamics of their own - gazebo_ros_control pid_gains, or an effort interface.
 #
-# As a starting scale if you do enable them: Lambda is 4 to 9 kg at a working
-# pose, so an admittance of 1/(2*D) with D a damping of a few hundred N s/m
-# puts the inertia term in the mm/s range for the accelerations the gantry
-# produces here.
+# Measured, before you spend time on them. With a base disturbance injected on
+# purpose (gantry_disturbance.launch, y axis, 20 mm at 1 Hz) and the joint PID
+# gains on, the end effector's peak-to-peak motion in world as a fraction of the
+# base's was 101.5 % with the feedforward off, 72.5 % with the kinematic
+# feedforward alone, and 104.3 % with A_inertia at 0.01*I - the model term made
+# it worse. Two reasons, both of which a different admittance will not fix:
+#
+# a_ff is the base acceleration carried to the end effector, which this node
+# gets by differencing a base twist that the p3d plugin already got by
+# differencing a pose. Multiplying that second derivative by Lambda, 5 to 9 kg,
+# puts the noise into the velocity command: with no disturbance at all, the
+# end effector's jitter in world went from 0.006 mm peak-to-peak to 6.850 mm
+# when the term was switched on.
+#
+# And the shape is wrong even without the noise. The command is a velocity and
+# the Cartesian controller integrates it into a position, so a wrench admitted
+# as a velocity lands as a position 90 degrees out of phase with the deflection
+# it was supposed to cancel. A model that is to compensate the joint servos'
+# compliance belongs as a position feedforward where that integration happens,
+# next to q_cmd_ in cartesian_velocity_controller.cpp, not as a velocity
+# admittance one loop out. See README section 4.4.
 A_inertia:  [0,0,0,0,0,0,
              0,0,0,0,0,0,
              0,0,0,0,0,0,

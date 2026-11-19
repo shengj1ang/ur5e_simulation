@@ -1,0 +1,23 @@
+# A velocity controller for the four gantry axes.
+#
+# Nothing in this repository drove them before - machine_tool_control, which
+# with_moveit_new.launch can include, is not here - so they sat with no
+# controller at all, holding still only because gazebo_ros_control keeps writing
+# a velocity command of zero at them. They are a VelocityJointInterface, so a
+# JointGroupVelocityController is all that is needed to command them.
+#
+# This exists to inject a base disturbance: the arm is mounted on this gantry,
+# so moving it moves the arm's base while the arm is trying to hold its end
+# effector still. That is the disturbance the N_p and N_d feedforward terms in
+# sim_pid_control are written against, and until the gantry effort limits were
+# raised it could not be produced on purpose - see README section 6.
+#
+# It is not a machine-tool controller. There is no position loop here: command a
+# velocity and the axis moves at it, command zero and it stops where it is.
+gantry_velocity_controller:
+  type: velocity_controllers/JointGroupVelocityController
+  joints:
+    - x_joint
+    - y_joint
+    - z_joint
+    - r_joint

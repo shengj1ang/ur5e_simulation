@@ -182,6 +182,22 @@ copies under `sim_admittance_control` and `sim_cartesian_velocity_control`), in 
 No rebuild; re-sync and restart. The controller prints the three values when it
 initialises, and warns (throttled) whenever it is solving near a singularity.
 
+### Disturb the arm's base on purpose
+
+```bash
+roslaunch sim_bringup gantry_disturbance.launch axis:=y amplitude:=0.02 frequency:=1.0 duration:=20
+```
+
+On top of a running bringup, with whichever arm controller you are testing
+already started. It loads a velocity controller for the four gantry axes and
+drives one of them sinusoidally, ramped in and out so the run does not open with
+a step. `axis` is x, y, z or r; `amplitude` is the excursion, not the velocity.
+
+Measure the end effector on `/ee_pose_ground_truth`, which is in world.
+`ee_state` is in `base_link` and shows almost nothing, because that is exactly
+the blind spot this disturbance exploits - see README section 4.4 for the
+numbers and what they mean.
+
 ### Change how stiff the arm is
 
 `sim/sim_bringup/config/gazebo_joint_pid_gains.yaml`, one `{p, i, d, i_clamp}`
@@ -508,6 +524,7 @@ Two traps worth knowing:
 | `/joint_states` shows a velocity while the arm is still | Gazebo's reported joint velocities are wrong under a position interface (README §6). `ee_state`'s twist no longer uses them; `/joint_states` still does. |
 | One arm joint winds to its limit and sits there at full torque | Its URDF limits span more than 2*pi, which gazebo_ros_control's error calculation cannot represent. Keep the span under 2*pi (README section 6). |
 | `/joint_states` efforts are pinned at the effort limit from the first sample | The joint PID gains saturate immediately; see "Change how stiff the arm is". |
+| The gantry will not move when commanded | `gantry_velocity_controller` is not started, or its effort limit is below what it has to push. Nothing in bringup starts it; `gantry_disturbance.launch` does. |
 | The gantry drifts or spins when the arm moves | Its effort limit is below the reaction the arm can produce, so Gazebo's velocity motor loses (README section 6). |
 | The model feedforward does nothing although the admittances are set | The dynamics are unusable - the arm is at a singularity (it starts at one) or `sim_cartesian_dynamics_controller` is not running. The node says so, throttled to every 5 s. |
 | The whole plugin library fails to load, `undefined symbol: ..._6HYBRIDE` | KDL declares some `static const int` members (`ChainJntToJacDotSolver::HYBRID` and friends) without defining them. Binding a reference to one — which `setRepresentation(const int&)` and `setHybridRepresentation()` do — leaves the library undefined. Copy the value into a local first. |
