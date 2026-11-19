@@ -2,6 +2,7 @@
 #define CARTESIAN_VELOCITY_CONTROLLER_H
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <ros/node_handle.h>
 #include <geometry_msgs/Twist.h>
@@ -19,6 +20,7 @@
 #include "sim_cartesian_velocity_control/kinematic_chain_controller_base.h"
 #include <realtime_tools/realtime_buffer.h>
 #include <realtime_tools/realtime_publisher.h>
+#include "sim_cartesian_velocity_control/InertialFeedforwardState.h"
 
 namespace controller_interface
 {
@@ -81,7 +83,7 @@ public:
    */
   void computeFeedforwardOffset();
 
-  /** \brief Scale q_dt_cmd_ uniformly if it exceeds the cap and report clipping.
+  /** \brief Enforce the velocity cap and report a material reduction in scale.
    */
   bool limitJointVelocities();
 
@@ -190,6 +192,10 @@ private:
   KDL::JntSpaceInertiaMatrix arm_inertia_;
   std::unique_ptr<KDL::ChainJntToJacDotSolver> jacobian_dot_;
   std::array<std::unique_ptr<KDL::ChainDynParam>, 3> unit_acceleration_models_;
+  std::unique_ptr<realtime_tools::RealtimePublisher<
+      sim_cartesian_velocity_control::InertialFeedforwardState>> inertia_state_pub_;
+  ros::Time last_inertia_state_time_;
+  std::vector<std::uint32_t> torque_clip_count_;
   ros::Subscriber base_acceleration_subscriber_;
 };
 

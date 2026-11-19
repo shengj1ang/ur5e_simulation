@@ -168,8 +168,8 @@ rosparam get /mass_arm
 
 ### Change how the Cartesian IK behaves near a singularity
 
-`sim_control/sim_pid_control/config/sim_vel_controller.yaml` (and its identical
-copies under `sim_admittance_control` and `sim_cartesian_velocity_control`), in both
+`sim_control/sim_pid_control/config/sim_vel_controller.yaml` and the corresponding
+files under `sim_admittance_control` and `sim_cartesian_velocity_control`, in both
 `sim_cartesian_velocity_controller` blocks:
 
 | Parameter | Default | What it does |
@@ -207,6 +207,18 @@ servos' deflection; 0 disables a term. `joint_stiffness` is the `p` and is read
 from `/gazebo_ros_control/pid_gains/<joint>/p` unless you set it, so if you
 retune the joint gains the compensation follows automatically. No rebuild;
 re-sync and restart.
+
+The simulated position controller also reads these options at load time.
+
+| Parameter | Default | What it does |
+|---|---|---|
+| `inertia_feedforward` | `true` for PID simulation, `false` in the plugin | Enable translational base-inertia compensation for a world-fixed target. The standalone Cartesian and admittance configurations use the plugin default. |
+| `base_acceleration_topic` | `/gantry/base_linear_acceleration` | Stamped `geometry_msgs/Vector3Stamped` input in the controller root frame, in m/s². |
+
+Record `/sim_cartesian_velocity_controller_sim/inertial_feedforward_state` for
+model activity, raw and bounded torque, offset, and clip counts. For paired
+measurements, keep the controller loaded and alternate delivery of the
+acceleration topic as described in README §4.4.
 
 The controller says at startup whether it is on, and says so too when it finds
 no stiffness - which is correct and not a fault when the joints are positioned

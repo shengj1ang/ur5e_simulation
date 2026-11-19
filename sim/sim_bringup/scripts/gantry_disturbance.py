@@ -68,7 +68,9 @@ def main():
         if all(math.isfinite(value) for value in q) and sum(value * value for value in q) > 0.0:
             base_orientation = (msg.header.stamp, quaternion_matrix(q)[:3, :3].T)
 
-    if axis != 'r':
+    if axis == 'r':
+        rospy.loginfo('gantry_disturbance: the r axis is rotational, so no linear acceleration will be published')
+    else:
         rospy.Subscriber('/base_pose_ground_truth', Odometry, read_base_orientation, queue_size=1)
 
     omega = 2.0 * math.pi * frequency
@@ -93,11 +95,17 @@ def main():
         msg.data[index] = velocity
         pub.publish(msg)
 
+        if axis == 'r':
+            return
         orientation = base_orientation
         if orientation is None:
+            rospy.logwarn_once('gantry_disturbance: no valid base orientation received from /base_pose_ground_truth, '
+                               'withholding linear acceleration')
             return
         orientation_stamp, world_to_base = orientation
         if not 0.0 <= (stamp - orientation_stamp).to_sec() <= 0.12:
+            rospy.logwarn_once('gantry_disturbance: base orientation timestamp is stale or in the future, '
+                               'withholding linear acceleration')
             return
         acceleration_msg = Vector3Stamped()
         acceleration_msg.header.stamp = stamp

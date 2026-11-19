@@ -348,6 +348,7 @@ void CartesianVelocityControllerBase<T>::update(const ros::Time& time, const ros
   }
 
   const bool velocity_limited = limitJointVelocities();
+  // The acceleration reference assumes the arm can execute the tracking motion.
   reference_unconstrained_ = ik_ret == 0 && !velocity_limited;
   computeFeedforwardOffset();
   writeVelocityCommands(time, period);
@@ -398,6 +399,10 @@ bool CartesianVelocityControllerBase<T>::limitJointVelocities()
     const double scale = max_joint_velocity_ / norm;
     for (unsigned int i = 0; i < q_dt_cmd_.rows(); i++)
       q_dt_cmd_(i) *= scale;
+    // Still enforce the exact cap, but tolerate roundoff and marginal scaling
+    // when deciding whether the acceleration reference is usable.
+    if (scale >= 0.999)
+      return false;
     ROS_WARN_THROTTLE(5.0, "Cartesian velocity controller: joint velocity "
                            "%.3f rad/s over the %.3f rad/s cap, scaled by %.3f",
                       norm, max_joint_velocity_, scale);
@@ -490,6 +495,18 @@ bool CartesianVelocityControllerSim::init(hardware_interface::PositionJointInter
   }
 
   n.getParam("root_name", root_name_);
+  torque_clip_count_.assign(joints, 0);
+  inertia_state_pub_.reset(new realtime_tools::RealtimePublisher<
+      sim_cartesian_velocity_control::InertialFeedforwardState>(n, "inertial_feedforward_state", 4));
+  auto& state = inertia_state_pub_->msg_;
+  state.header.frame_id = root_name_;
+  for (const auto& joint : joint_handles_)
+    state.joint_names.push_back(joint.getName());
+  state.inertial_offset.resize(state.joint_names.size());
+  state.inertial_torque.resize(state.joint_names.size());
+  state.commanded_torque.resize(state.joint_names.size());
+  state.torque_clip_count.resize(state.joint_names.size());
+
   base_acceleration_subscriber_ = n.subscribe(
       topic, 1, &CartesianVelocityControllerSim::baseAccelerationCallback,
       this, ros::TransportHints().tcpNoDelay());
@@ -503,7 +520,11 @@ void CartesianVelocityControllerSim::starting(const ros::Time& time)
   CartesianVelocityControllerBase::starting(time);
   started_at_ = time;
   if (inertia_feedforward_enabled_)
+  {
     KDL::SetToZero(inertial_offset_);
+    std::fill(torque_clip_count_.begin(), torque_clip_count_.end(), 0);
+    last_inertia_state_time_ = time;
+  }
 }
 
 void CartesianVelocityControllerSim::baseAccelerationCallback(const geometry_msgs::Vector3StampedConstPtr& msg)
@@ -595,6 +616,16 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
   const double dt = period.toSec();
   const bool compensate_inertia = inertia_feedforward_enabled_ && dt > 0.0 &&
                                  computeInertialTorque(time);
+  sim_cartesian_velocity_control::InertialFeedforwardState* state = nullptr;
+  if (inertia_state_pub_ && publish_rate_ > 0.0 &&
+      (time - last_inertia_state_time_).toSec() >= 1.0 / publish_rate_ &&
+      inertia_state_pub_->trylock())
+  {
+    last_inertia_state_time_ = time;
+    state = &inertia_state_pub_->msg_;
+    state->header.stamp = time;
+    state->active = compensate_inertia;
+  }
   for(std::size_t i=0; i < this->joint_handles_.size(); i++)
   {
     q_cmd_(i) += q_dt_cmd_(i)*dt;
@@ -635,18 +666,34 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
       const double d = joint_damping_[i];
       // A bounded torque also bounds the inverse PD's position offset to 25 mrad.
       const double torque_limit = p * 0.025;
-      const double torque = compensate_inertia && !lead_limited
-          ? std::max(-torque_limit, std::min(torque_limit, inertial_torque_(i)))
-          : 0.0;
+      const double model_torque = compensate_inertia ? inertial_torque_(i) : 0.0;
+      const double requested_torque = lead_limited ? 0.0 : model_torque;
+      const double torque = std::max(-torque_limit, std::min(torque_limit, requested_torque));
+      if (torque != requested_torque)
+      {
+        ++torque_clip_count_[i];
+        ROS_WARN_THROTTLE(5.0, "Inertial feedforward torque clipped on %s: requested %.3f N*m, "
+                              "bounded to %.3f N*m (limit %.3f N*m)",
+                          joint_handles_[i].getName().c_str(), requested_torque, torque, torque_limit);
+      }
       double& offset = inertial_offset_(i);
       // Backward Euler inverse of P + D*s. Let it decay with zero added
       // torque when the input expires; dropping a nonzero offset would kick D.
       if (dt > 0.0)
         offset += dt * (torque - p * offset) / (d + p * dt);
       command += offset;
+      if (state)
+      {
+        state->inertial_offset[i] = offset;
+        state->inertial_torque[i] = model_torque;
+        state->commanded_torque[i] = torque;
+        state->torque_clip_count[i] = torque_clip_count_[i];
+      }
     }
     this->joint_handles_[i].setCommand(command);
   }
+  if (state)
+    inertia_state_pub_->unlockAndPublish();
 }
 
 } // controller_interface namespace

@@ -400,12 +400,14 @@ feedback helps instead of fighting.
 **The model inertia term, as written, makes it worse**, and the reason is worth
 being precise about rather than tuning around:
 
-* The node estimates `a_ff`, the base acceleration carried to the end effector,
-  by backward-differencing the 50 Hz base twist published by p3d. Multiplying
-  the estimate by Λ, 5 to 9 kg, puts the difference noise into the velocity
-  command. With no disturbance at
-  all, end-effector jitter in world went from 0.006 mm peak-to-peak to
-  **6.850 mm** when the term was switched on.
+* The node estimates `a_ff` by backward-differencing the 50 Hz base twist
+  carried to the end effector. Differentiation amplifies noise already present
+  in the sampled velocity. If the velocity itself comes from position
+  differences, this chain takes a second difference. The installed Noetic
+  p3d 2.9.3 publishes Gazebo's link velocity directly. Multiplying the
+  acceleration estimate by Λ (5 to 9 kg) feeds its noise into the velocity
+  command. With no injected disturbance, enabling the term raised world-frame
+  end-effector jitter from 0.006 mm to **6.850 mm** peak-to-peak. [Noetic p3d 2.9.3 source](https://github.com/ros-simulation/gazebo_ros_pkgs/blob/2.9.3/gazebo_plugins/src/gazebo_ros_p3d.cpp#L250-L328)
 * Even without the noise the shape is wrong. The arm is commanded in velocity
   and the command is integrated into a position, so a wrench admitted as a
   velocity arrives as a position 90 degrees out of phase with the deflection it
@@ -504,11 +506,10 @@ which is also what `sim_admittance_control` and anything commanding twists
 directly are using.
 
 **PID simulation enables position feedforward for translational base inertia.**
-The launch reads `inertia_feedforward` from `sim_vel_controller.yaml`.
-Start the Cartesian controller and PID as in §4.3, hold a world-fixed target,
-and run `gantry_disturbance.launch` as above. For an A/B comparison, set the
-parameter to false and reload the Cartesian controller. Keep the three outer
-velocity admittance matrices at zero.
+The PID launch sets `inertia_feedforward` in `sim_vel_controller.yaml`. The
+standalone Cartesian and admittance configurations use the plugin default of
+false. Start the Cartesian controller and PID as in §4.3 and hold a world-fixed
+target with the three outer velocity admittance matrices at zero.
 
 For X, Y and Z disturbances, the gantry node publishes the analytic derivative
 of its velocity command, including the ramps, on
@@ -520,16 +521,75 @@ world-fixed end-effector target.
 
 The payload-aware KDL chain supplies both the joint inertia needed to hold the
 tool in world and the inertial coupling from the accelerating base. The
-controller adds their sum as an equivalent position offset by solving
-`D·Δq̇ + P·Δq = τ_inertia` with the Gazebo PD gains read at load time.
-Stale input, damped IK and reference clipping cause the controller to decay the
-affected offset with zero extra torque.
+controller converts their sum to a position offset by solving
+`D·Δq̇ + P·Δq = τ_inertia` with the Gazebo PD gains read at load time. The
+acceleration reference assumes that the arm can track it. Damped IK or a joint
+velocity scale below 0.999 suspends the inertial request. The exact velocity cap
+still applies at the boundary. An individual joint at its command-lead limit
+also gets zero requested torque. Offsets decay through the inverse PD when
+requests are suspended or the input expires.
 
-At the SRDF `init` pose, two A/B runs with a 20 mm Y-axis gantry disturbance
-reduced mean fundamental transmission from 32.5% to 30.8% at 3 Hz and from
-64.1% to 60.6% at 5 Hz. The 1 Hz results were about 8%, with the difference
-between on and off varying across trials. The measurements use a single-tone
-least-squares fit over whole cycles.
+Record `/sim_cartesian_velocity_controller_sim/inertial_feedforward_state`
+to see whether the model is active, the raw model torque, the torque target
+after gating and clipping, the applied offsets, and per-joint clip counts.
+The controller also emits a throttled warning when the inertial torque clips.
+
+For a paired A/B test, start the gantry velocity controller once and keep
+`inertia_feedforward: true` in the same bringup. Alternate OFF and ON without
+reloading the Cartesian controller or resetting its reference. For OFF,
+remap the acceleration publisher as shown below. For ON, omit the remap.
+
+```bash
+rosrun sim_bringup gantry_disturbance.py \
+  /gantry/base_linear_acceleration:=/suppressed_accel \
+  _axis:=y _amplitude:=0.02 _frequency:=3.0 _duration:=6.5 _ramp:=1.0
+```
+
+Record both world-frame positions and the acceleration and controller-state
+topics. Confirm that OFF receives zero acceleration samples and that the
+model is active in ON. Fit each position to a single tone plus an offset and
+linear drift over a whole number of periods. Report each pair's OFF minus ON
+transmission in percentage points, with the sample standard deviation across
+at least five pairs per frequency. Include 1 Hz as the low-acceleration control.
+
+In a headless test at the SRDF `init` pose with a 20 mm Y-axis disturbance,
+every state sample in the OFF fit windows reported inactive, and every state
+sample in the ON windows reported active. The clip counters stayed at zero
+during the frequency trials.
+
+| Frequency | OFF mean | ON mean | Paired OFF − ON, mean ± sample SD (percentage points) |
+|---|---:|---:|---:|
+| 1 Hz | 8.05% | 7.95% | +0.10 ± 0.14 |
+| 3 Hz | 34.09% | 33.45% | +0.64 ± 2.25 |
+| 5 Hz | 63.03% | 62.28% | +0.75 ± 1.01 |
+
+An independent run of six pairs across two further bringups found +0.13 points
+at 3 Hz and +2.96 at 5 Hz. A paired difference is internally controlled, so
+pairs pool across bringups even though legs do not. Pooling every pair from all
+three bringups:
+
+| Frequency | Pairs | Pooled OFF − ON, mean ± SE | 95 % interval | Resolved |
+|---|---:|---:|---:|---|
+| 1 Hz | 8 | −0.04 ± 0.09 | [−0.26, +0.18] | no, and that is the control working |
+| 3 Hz | 11 | +0.36 ± 0.57 | [−0.90, +1.62] | no |
+| 5 Hz | 11 | +1.96 ± 0.70 | [+0.41, +3.51] | yes, at 95 % |
+
+So the term buys about two points at 5 Hz and nothing measurable at 3 Hz or
+1 Hz. The 1 Hz control bracketing zero is what makes the 5 Hz result credible:
+the effect appears in step with the base acceleration - 0.79, 7.1 and
+19.7 m/s² - rather than with elapsed time. Its size is poorly determined. The
+two runs disagree, +0.75 against +2.96, because the OFF baseline itself wanders
+about seven points from pair to pair inside a single bringup: 30.7 % to 37.5 %
+at 3 Hz here, 30.6 % to 37.2 % in the independent run. Both runs used a fixed
+OFF→ON order, so that drift enters each paired difference at first order. An
+ABBA order would cancel it to first order, and is what the next measurement
+should use. Resolving half a point at 3 Hz against this baseline needs of the
+order of forty pairs.
+
+The analytic acceleration bypasses p3d for this feedforward term. World-frame
+feedback still forms its pose error from the 50 Hz `/base_pose_ground_truth`
+stream, among its other inputs. The half-sample delay of that stream is about
+10.8° at 3 Hz and remains part of the loop's phase lag.
 
 ### 4.5 Tuning
 

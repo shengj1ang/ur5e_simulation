@@ -56,7 +56,8 @@ sim_cartesian_velocity_controller:
 
 sim_cartesian_velocity_controller_sim:
   type: cartesian_controller/CartesianVelocityControllerSim
-  # Active during world hold when a fresh translational base acceleration is available.
+  # Enabled by default only for the PID simulation's world-fixed target.
+  # The standalone Cartesian and admittance configurations use the plugin default (false).
   inertia_feedforward: true
   publish_rate: 125
   root_name: base_link

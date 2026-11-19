@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UR5e 基座平移扰动的惯性前馈验证</title>
+  <style>
+    :root { color-scheme: light; --ink: #1e2730; --muted: #53626f; --accent: #005880; --rule: #d8e0e6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0 1.25rem; color: var(--ink); background: #fff;
+      font: 16px/1.75 "Noto Serif SC", "Songti SC", "SimSun", serif; }
+    main { max-width: 880px; margin: 3rem auto 4rem; }
+    header { border-bottom: 1px solid var(--rule); margin-bottom: 1.75rem; padding-bottom: 1.25rem; }
+    h1, h2, thead, caption { font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+    h1 { font-size: clamp(1.75rem, 4.8vw, 2.55rem); letter-spacing: -.025em; line-height: 1.27; margin: 0; }
+    h2 { color: var(--accent); font-size: 1.24rem; margin: 2.05rem 0 .52rem; }
+    p { margin: .55rem 0 .85rem; }
+    header p, figcaption, footer { color: var(--muted); }
+    header p { margin: .65rem 0 0; }
+    .table-frame { overflow-x: auto; margin: 1rem 0 1.3rem; }
+    table { width: 100%; border-collapse: collapse; text-align: right; font-variant-numeric: tabular-nums; }
+    caption { text-align: left; font-size: .96rem; font-weight: 600; margin-bottom: .55rem; }
+    th, td { padding: .42rem .63rem; white-space: nowrap; border-bottom: 1px solid var(--rule); }
+    thead { background: #f3f6f8; font-size: .9rem; }
+    figure { margin: 1.45rem 0 1.65rem; break-inside: avoid; }
+    figure img { display: block; width: 100%; height: auto; }
+    figcaption { margin-top: .42rem; font-size: .9rem; line-height: 1.55; }
+    footer { border-top: 1px solid var(--rule); margin-top: 1.75rem; padding-top: .75rem; font-size: .87rem; }
+    code { font-family: Consolas, monospace; font-size: .87em; overflow-wrap: anywhere; }
+    a { color: var(--accent); text-underline-offset: .14em; }
+    @media print {
+      main { margin: 0; max-width: none; }
+      body { padding: 0; font-size: 10.5pt; }
+      h2 { break-after: avoid; }
+      figure img { max-height: 10.5cm; object-fit: contain; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>UR5e 基座平移扰动的惯性前馈验证</h1>
+    <p>ROS Noetic · Gazebo 11 · 同一仿真内配对试验 · 2026 年 11 月 19 日</p>
+  </header>
+  <section aria-labelledby="introduction">
+    <h2 id="introduction">引言</h2>
+    <p>龙门平移时，控制目标是将 UR5e 末端保持在世界坐标系的固定位置。本试验检验在既有前馈反馈回路上加入惯性补偿后，末端沿扰动方向的基频位移是否下降。</p>
+  </section>
+  <section aria-labelledby="methodology">
+    <h2 id="methodology">方法</h2>
+    <p>由末端零加速度约束求关节参考加速度。含末端负载的 KDL 模型计算参考惯性力矩，并用等效加速度场计算基座耦合力矩。合力矩通过离散逆 PD 换算为位置偏置。逆解受阻尼或关节速度实质限幅时，暂停惯性请求。</p>
+    <p>在同一次 headless 仿真中保持 SRDF <code>init</code> 附近的世界系目标，施加峰值 20 mm 的 Y 轴扰动。在 1、3、5 Hz 各做五组 OFF→ON，OFF 重映射加速度话题。每条腿取 4 s 整周期窗口，对世界系位移拟合单频、常数项与线性漂移。末端与基座基频幅值之比为传递率，配对差定义为 OFF 减 ON。1 Hz 的解析加速度峰值为 0.79 m/s²，是 5 Hz 的 1/25，用作低加速度对照。</p>
+  </section>
+  <section aria-labelledby="results">
+    <h2 id="results">结果</h2>
+    <div class="table-frame"><table>
+      <caption>表 1　基频传递率及五组配对差</caption>
+      <thead><tr><th scope="col">频率 (Hz)</th><th scope="col">OFF (%)</th><th scope="col">ON (%)</th>
+        <th scope="col">差值 ± SD (百分点)</th><th scope="col">差值范围 (百分点)</th><th scope="col">钳位更新数</th></tr></thead>
+      <tbody><tr><th scope='row'>1</th><td>8.05</td><td>7.95</td><td>+0.10 ± 0.14</td><td>-0.06 至 +0.33</td><td>0</td></tr><tr><th scope='row'>3</th><td>34.09</td><td>33.45</td><td>+0.64 ± 2.25</td><td>-1.47 至 +3.67</td><td>0</td></tr><tr><th scope='row'>5</th><td>63.03</td><td>62.28</td><td>+0.75 ± 1.01</td><td>-0.21 至 +2.02</td><td>0</td></tr></tbody>
+    </table></div>
+    <figure><img src="img/inertial_feedforward_paired.png" width="2400" height="1035"
+        alt="三个频率的五组 OFF 和 ON 传递率，以线连接每对，并显示配对差、均值和样本标准差。">
+      <figcaption><strong>图 1.</strong> 配对差为正表示基频传递率下降。误差棒为 ±1 个样本标准差，反映组间离散度。</figcaption></figure>
+    <figure><img src="img/inertial_feedforward_waveforms.png" width="2400" height="1305"
+        alt="3 Hz 和 5 Hz 的基座与末端位移波形，以基座拟合相位对齐。">
+      <figcaption><strong>图 2.</strong> 3 Hz 和 5 Hz 分别展示配对差居中的第 3、5 组。位移去除拟合常数项与线性漂移，按基座基频相位对齐。</figcaption></figure>
+    <p>正式扫频中记录到 0 次惯性力矩钳位更新。扫频结束后的独立脉冲触发了肩部旋转关节的钳位计数，输入过期后偏置衰减。</p>
+    <figure><img src="img/inertial_feedforward_diagnostics.png" width="2175" height="1200"
+        alt="诊断脉冲下模型力矩超过限值，逆 PD 力矩目标被钳位，输入过期后位置偏置逐渐衰减。">
+      <figcaption><strong>图 3.</strong> 超量程合成加速度专用于诊断测试。阴影表示模型激活区间，棕色点线为该关节的力矩钳位。</figcaption></figure>
+  </section>
+  <section aria-labelledby="discussion">
+    <h2 id="discussion">讨论</h2>
+    <p>1、3、5 Hz 的配对差分别为 +0.10 ± 0.14、+0.64 ± 2.25 和 +0.75 ± 1.01 个百分点。独立三组试验在 3 Hz 的配对差为 −0.81 个百分点。两轮均值符号不同，变化幅度小于本轮组间标准差。5 Hz 本轮有 4/5 组传递率下降，独立三组试验平均下降 2.94 个百分点，三组方向一致。本轮数据来自单次仿真，固定的 OFF→ON 顺序仍可能受到时间漂移影响。</p>
+    <p>解析加速度用于惯性前馈，世界系反馈仍使用 50 Hz p3d 基座状态，半个采样周期在 3 Hz 约为 10.8°。已安装的 p3d 直接读取 Gazebo 连杆速度。3 Hz 时，速度相对同一位移基频求导的中位相位差为 -0.73°。</p>
+  </section>
+  <footer>数据来自同一次 VM 仿真的 <code>rostopic echo -p</code> 记录。逐组数据保存于 VM 的 <code>/tmp/ur5e-inertia-paired.BPefcd/measurements.csv</code>。
+    <a href="../README.zh-CN.md">仓库配置和复测步骤</a> ·
+    <a href="https://github.com/ros-simulation/gazebo_ros_pkgs/blob/2.9.3/gazebo_plugins/src/gazebo_ros_p3d.cpp#L250-L328">p3d 2.9.3 源码</a>
+  </footer>
+</main>
+</body>
+</html>
