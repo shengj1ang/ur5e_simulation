@@ -6,9 +6,11 @@ import csv
 from itertools import permutations
 from pathlib import Path
 import time
+from xml.etree import ElementTree
 
 import actionlib
 import numpy as np
+import rospkg
 import rospy
 from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
 from controller_manager_msgs.srv import LoadController, SwitchController
@@ -70,7 +72,17 @@ def append_row(stream, row):
     stream.flush()
 
 
-def main(out, tune, validate_gains):
+def pose_positions(name):
+    package = Path(rospkg.RosPack().get_path("sim_moveit_config"))
+    srdf = ElementTree.parse(package/"config"/"sim.srdf")
+    pose = srdf.find(f"./group_state[@name='{name}'][@group='manipulator']")
+    if pose is None:
+        raise ValueError(f"Unknown manipulator pose: {name}")
+    joints = {joint.attrib["name"]: float(joint.attrib["value"]) for joint in pose.findall("joint")}
+    return [joints[name] for name in JOINTS]
+
+
+def main(out, args):
     rospy.init_node("ur5e_mapping_200hz")
     assert rospy.get_param("/regulate_in_world") is True
     assert rospy.get_param(f"/{ARM}/inertia_feedforward") is True
@@ -116,7 +128,7 @@ def main(out, tune, validate_gains):
     assert switch([GANTRY], [], 2, False, 5.0).ok
     goal = FollowJointTrajectoryGoal()
     goal.trajectory.joint_names = JOINTS
-    goal.trajectory.points = [JointTrajectoryPoint(positions=[0., -1.57, 1.57, 0., 1.57, 1.57],
+    goal.trajectory.points = [JointTrajectoryPoint(positions=pose_positions(args.pose),
                                                    time_from_start=rospy.Duration(3.0))]
     goal.goal_time_tolerance = rospy.Duration(2.0)
     client.send_goal(goal)
@@ -133,7 +145,7 @@ def main(out, tune, validate_gains):
     target.header.frame_id = "pid"
     hold.publish(target)
     rospy.sleep(1.5)
-    print(f"READY: native {configured_rate:g} Hz p3d, one world-frame target", flush=True)
+    print(f"READY: native {configured_rate:g} Hz p3d, SRDF pose {args.pose}, one world-frame target", flush=True)
 
     def select(mode):
         use_static = mode == "static"
@@ -187,9 +199,14 @@ def main(out, tune, validate_gains):
             profile, mode, abs(p_base)/amplitude)
         return begin, p_base, p_tip, base_rms, tip_rms, base_rate, active, diag, rtf
 
-    if tune or validate_gains:
+    if args.compare_tuned_inertia:
+        from inertia_followup import compare_tuned_inertia
+        compare_tuned_inertia(out, run_leg)
+        return
+
+    if args.tune or args.validate_gains:
         from pid_tuning import tune_gains
-        tune_gains(out, run_leg, hold, target, lambda: base_pose, tip, validate_gains)
+        tune_gains(out, run_leg, hold, target, lambda: base_pose, tip, args.validate_gains, args.full_validation)
         return
 
     rng = np.random.default_rng(440200)
@@ -230,8 +247,11 @@ def main(out, tune, validate_gains):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--pose", default="init", help="SRDF manipulator group state")
+    parser.add_argument("--full-validation", action="store_true", help="Check both 20 mm and 30 mm in six paired blocks")
     suite = parser.add_mutually_exclusive_group()
     suite.add_argument("--tune", action="store_true")
     suite.add_argument("--validate-gains", type=float, nargs=2, metavar=("KP_Y", "KD_Y"))
+    suite.add_argument("--compare-tuned-inertia", action="store_true")
     args = parser.parse_args()
-    main(args.output, args.tune, args.validate_gains)
+    main(args.output, args)

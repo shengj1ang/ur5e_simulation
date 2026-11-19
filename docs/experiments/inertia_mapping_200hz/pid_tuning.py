@@ -16,6 +16,10 @@ from tf.transformations import quaternion_inverse, quaternion_matrix, quaternion
 from bench import ARM, PROFILES, append_row, fit
 
 
+FULL_CONDITIONS = ((.020, 8.0), (.030, 4.0))
+VALIDATION_SEED = 412195
+
+
 def pose_components(pose):
     p, q = pose.position, pose.orientation
     return np.array([p.x, p.y, p.z]), np.array([q.x, q.y, q.z, q.w])
@@ -30,7 +34,7 @@ def wave(rng, frequencies, duration, peak):
     return omega, phase, peak*weights/maximum, duration
 
 
-def tune_gains(out, run_leg, hold, initial_target, current_base, tip, validate_gains=None):
+def tune_gains(out, run_leg, hold, initial_target, current_base, tip, validate_gains=None, full_validation=False):
     p, q = pose_components(current_base())
     goal_p, goal_q = pose_components(initial_target.pose)
     world_p = p + quaternion_matrix(q)[:3, :3] @ goal_p
@@ -151,10 +155,11 @@ def tune_gains(out, run_leg, hold, initial_target, current_base, tip, validate_g
                     return
                 winner = min(eligible, key=lambda g: average(results[g], "rms_transfer_pct"))
                 print(f"SELECTED for independent validation: {winner}, baseline {baseline}", flush=True)
-            conditions = [(0.020, 6.0)] if validate_gains else [(0.020, 8.0), (0.030, 4.0)]
-            validation_rng = np.random.default_rng(451195 if validate_gains else 412195)
+            short_check = validate_gains and not full_validation
+            conditions = [(0.020, 6.0)] if short_check else FULL_CONDITIONS
+            validation_rng = np.random.default_rng(451195 if short_check else VALIDATION_SEED)
             paired = {peak: {g: [] for g in (baseline, winner)} for peak, _ in conditions}
-            blocks = 4 if validate_gains else 6
+            blocks = 4 if short_check else 6
             for block in range(1, blocks+1):
                 settings = {peak: wave(validation_rng, freqs, duration, peak)
                             for peak, duration in conditions}
