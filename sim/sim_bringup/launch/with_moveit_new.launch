@@ -3,8 +3,9 @@
     <!-- these are the arguments you can pass this launch file, for example paused:=true -->
     <arg name="paused" default="false"/>
     <arg name="use_sim_time" value="true"/>
-    <arg name="gui" value="true"/>
-    <arg name="headless" value="false"/> <!-- Inert - see gazebo_ros_pkgs issue #491 -->
+    <arg name="gui" default="true"/>
+    <arg name="headless" default="false"/> <!-- Inert - see gazebo_ros_pkgs issue #491 -->
+    <arg name="use_rviz" default="$(eval not arg('headless'))"/>
     <arg name="recording" value="false"/>
     <arg name="debug" value="false"/>
 
@@ -18,7 +19,8 @@
         <arg name="headless" value="$(arg headless)"/>
     </include>
 
-    <arg name="base_pose_update_rate" default="50.0"/>
+    <!-- Faster base state updates reduce delay in world-frame PID control. -->
+    <arg name="base_pose_update_rate" default="200.0"/>
     <arg name="model" default="$(find xacro)/xacro '$(find sim_description)/urdf/xacro/main.xacro' base_pose_update_rate:=$(arg base_pose_update_rate)" />
 
     <!-- Run a python script to the send a service call to gazebo_ros to spawn a URDF robot -->
@@ -53,6 +55,7 @@
     <include file="$(find machine_tool_control)/launch/machine_tool_control4sim.launch"
              if="$(arg use_machine_tool)"/>
 
-    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find sim_description)/rviz/all.rviz" required="true" />
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find sim_description)/rviz/all.rviz"
+          required="true" if="$(arg use_rviz)" />
 
 </launch>

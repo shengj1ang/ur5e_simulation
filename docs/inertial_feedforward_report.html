@@ -197,6 +197,8 @@
     <h2 id="discussion">4　讨论<span lang="en">Discussion</span></h2>
     <p>世界系反馈负责纠正位姿误差，动力学模型在关节层提供前馈补偿。导纳式动态映射能降低关节补偿峰值。原 PID 下的 200 Hz 试验尚未分辨出惯性前馈的额外抗扰收益。新 PID 下，20 mm 对照显示惯性支路可进一步降低末端误差。加快底座状态更新也带来了可重复的收益，该信号同时进入位姿反馈和运动学前馈。</p>
     <p>在动力学前馈保持固定时，Y 向反馈调参在两种姿态下都将末端 RMS 降低约三成。惯性前馈在 <code>init</code> 姿态的 20 mm 工况下带来可测的额外收益，30 mm 工况仍有较大不确定性。结果适用于 Gazebo 中受 Y 向平移扰动的世界系定点任务。固定振幅时，所需的补偿加速度随频率平方增长，关节限速会约束高频、大振幅工况。</p>
+    <p>常用的 <code>with_moveit_new.launch</code> 现默认采用 200 Hz。50 Hz 与 200 Hz 均在该入口通过了无界面的 MoveIt → PID → MoveIt 验证。20 mm 单频启动检查中，3 Hz 末端传递率由 21.08% 降至 11.36%，5 Hz 由 46.62% 降至 20.40%，实时因子均接近 1。省略采样率参数的复测也实际测到 200 Hz，并完成了同样的控制交接。</p>
+    <p>30 mm 复测中，8 Hz 的实测基座加速度幅值比指令高约 15%，相位滞后 11.8°–12.7°。开启前馈后变差的第六组也在这个范围内。因此存在可测的高频输入偏差，目前证据无法将该组末端误差上升归因于这一偏差。</p>
     <details>
       <summary>补充试验数据与复测设置</summary>
       <p>提频的配对改善量在 1、3、5 Hz 分别为 4.42 [3.64, 5.20]、17.33 [15.09, 19.57]、29.67 [24.42, 34.91] 个百分点，方括号是 95% 区间。主试验全程基座净移动约 56 mm。近零净位移的独立复测中，3 Hz 为 33.1% → 16.3%，5 Hz 为 62.6% → 29.3%，基座净移动 1.23 mm。</p>
@@ -207,6 +209,8 @@
       <p>PID 调参的<a href="experiments/inertia_mapping_200hz/pid-gain-trials.csv">逐段统计</a>和<a href="experiments/inertia_mapping_200hz/pid-gain-responses.csv">逐频结果</a>包含筛选与独立验证。<code>bash run.sh 新输出目录 --tune</code> 可复试，绘图用 <code>python3 analyze_pid.py 数据目录 图像路径</code>。原始话题位于 VM 的 <code>/tmp/ur5e-pid-tuning.ptyNtZ/tuning</code>。</p>
       <p>默认 50 Hz 采样率下，20 mm 多频扰动另做了四组配对复测。RMS 传递率由 31.42% 降至 24.81%，配对改善 6.61 [2.95, 10.27] 个百分点。最差频点的配对改善区间为 −5.55 至 25.83 个百分点。<a href="experiments/inertia_mapping_200hz/pid-gain-50hz-trials.csv">50 Hz 试次</a>及<a href="experiments/inertia_mapping_200hz/pid-gain-50hz-responses.csv">逐频结果</a>使用 <code>UR5E_BENCH_BASE_RATE=50.0 bash run.sh 新输出目录 --validate-gains 12.0 0.35</code> 复试。</p>
       <p>新 PID 下惯性前馈开关的<a href="experiments/inertia_mapping_200hz/tuned-inertia-trials.csv">逐段统计</a>与<a href="experiments/inertia_mapping_200hz/tuned-inertia-responses.csv">逐频结果</a>可用 <code>bash run.sh 新输出目录 --compare-tuned-inertia</code> 复试。取料起始姿态的<a href="experiments/inertia_mapping_200hz/second-pose-gain-trials.csv">逐段统计</a>与<a href="experiments/inertia_mapping_200hz/second-pose-gain-responses.csv">逐频结果</a>可用 <code>bash run.sh 新输出目录 --pose 1st_reco_start --validate-gains 12.0 0.35 --full-validation</code> 复试。绘图用 <code>python3 analyze_followup.py 数据目录 图像路径</code>。原始话题位于 VM 的 <code>/tmp/ur5e-pid-inertia-followup.bpkZvB</code>。</p>
+      <p>加速度对照用同一拟合窗口内的基座速度相量乘以 <i>jω</i>，再与按原始种子重建的解析指令加速度比较。对 30 mm 开启组的 8 Hz 分量，用位移相量乘以 −<i>ω</i><sup>2</sup> 交叉复算，两种估计的幅值相差不超过 0.12%，相位相差不超过 1.66°。<a href="experiments/inertia_mapping_200hz/base-acceleration-comparison.csv">逐频数据</a>可用 <code>python3 check_base_acceleration.py 原始base.csv 数据目录 输出.csv</code> 复算。</p>
+      <p>常用启动可用 <code>bash run_standard.sh 新输出目录 200</code> 复验。交还 MoveIt 后等待实测关节稳定，再从实际姿态规划至 <code>1st_reco_start</code>。<a href="experiments/inertia_mapping_200hz/standard-bringup-smoke.csv">启动检查记录</a>含显式 50 Hz、显式 200 Hz 和默认 200 Hz 三次运行。</p>
     </details>
   </section>
 
