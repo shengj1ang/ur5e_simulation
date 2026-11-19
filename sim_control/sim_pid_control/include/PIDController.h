@@ -17,6 +17,8 @@
 
 #include "std_srvs/Trigger.h"
 
+#include "sim_cartesian_velocity_control/OperationalSpaceDynamics.h"
+
 using namespace Eigen;
 
 typedef Matrix<double, 7, 1> Vector7d;
@@ -44,6 +46,7 @@ protected:
   ros::Subscriber sub_ee_ground_truth_;
   ros::Subscriber sub_now_equilibrium_;
   ros::Subscriber sub_presuppose_;
+  ros::Subscriber sub_ee_dynamics_;
   ////// Publishers:
   // Publisher for the twist of arm endeffector
   ros::Publisher pub_arm_cmd_;
@@ -54,6 +57,10 @@ protected:
   // K_ -> Desired Stiffness of the coupling
   Matrix6d K_p_, K_i_, K_d_;
   Matrix6d N_p_, N_d_;
+  // Admittances through which the three model wrenches are turned into a
+  // velocity contribution, in (m/s)/N and (rad/s)/(N m). Zero disables the
+  // term, which is the default - see compute_pid().
+  Matrix6d A_inertia_, A_coriolis_, A_gravity_;
   // Accumulated pose error for the integral term, and the anti-windup bound on
   // the term it produces (in m/s and rad/s, i.e. the unit of the output).
   Vector6d error_integral_;
@@ -62,6 +69,14 @@ protected:
   Vector3d equilibrium_position_;
   // equilibrium orientation of the coupling spring
   Quaterniond equilibrium_orientation_;
+
+  // MANIPULATOR DYNAMICS, from sim_cartesian_dynamics_controller
+  Matrix6d op_inertia_;      // Lambda
+  Vector6d op_coriolis_;     // mu
+  Vector6d op_gravity_;      // p
+  bool dynamics_valid_;      // the publisher's own validity flag
+  ros::Time last_dynamics_time_;
+  bool model_feedforward_enabled_;  // any of the three admittances is nonzero
 
   // INPUT MODEL
   Vector6d model_affect_ee_twist_;
@@ -142,6 +157,10 @@ protected:
   void base_state_callback(const nav_msgs::OdometryConstPtr msg);
   void ee_ground_truth_state_callback(const nav_msgs::OdometryConstPtr msg);
   void presuppose_callback(const geometry_msgs::TwistConstPtr msg);
+  void ee_dynamics_callback(
+      const sim_cartesian_velocity_control::OperationalSpaceDynamicsConstPtr msg);
+  /** \brief Whether the last dynamics message can be used this cycle */
+  bool dynamics_usable() const;
   void now_equilibrium_callback(const geometry_msgs::PoseStampedConstPtr msg);
   // Util
   bool get_rotation_matrix(Matrix6d &rotation_matrix, tf::TransformListener &listener, std::string from_frame, std::string to_frame);
@@ -160,6 +179,10 @@ public:
                 std::vector<double> K_d,
                 std::vector<double> N_p,
                 std::vector<double> N_d,
+                std::vector<double> A_inertia,
+                std::vector<double> A_coriolis,
+                std::vector<double> A_gravity,
+                std::string topic_ee_dynamics,
                 std::vector<double> workspace_limits,
                 double arm_max_vel,
                 double arm_acc_upper_limit,

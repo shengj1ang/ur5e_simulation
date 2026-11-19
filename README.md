@@ -223,8 +223,9 @@ What each one actually needs:
   `arm_joint_controller` and `sim_cartesian_velocity_controller_sim` itself. It
   reads the arm state from `/sim_cartesian_velocity_controller_sim/ee_state`;
   point it elsewhere (the real robot's controller has no `_sim` suffix) with the
-  `arm_state_topic` parameter. It also expects `/base_pose_ground_truth` from a
-  mobile base that is not part of this model, so the base pose stays at zero.
+  `arm_state_topic` parameter. It also reads `/base_pose_ground_truth`, which a
+  p3d plugin on `base_link` does publish - the gantry is unactuated, so that
+  pose drifts rather than staying put (section 6).
 * `twelve_monkeys` and `hex_love` are self-contained: they only publish a
   `nav_msgs/Path` and markers for RViz, so they need no controllers at all.
 
@@ -327,11 +328,34 @@ inertia. Check `valid` and fall back to whatever you did without a model.
 At a well-conditioned pose `inertia · inertia_inv` differs from the identity by
 3e-14 and Λ is symmetric to 6e-16.
 
+**Using it as a feedforward.** `sim_pid_control` subscribes to this topic and
+forms, in the operational-space way,
+
+```
+F = Λ · a_ff + μ + p
+```
+
+with `a_ff` the acceleration the arm has to produce at the end effector to leave
+it where it is while the gantry moves its base — minus the base acceleration
+carried to the end effector, the same signal `N_d` acts on. The arm is commanded
+in velocity, so each wrench enters the command as the motion it would produce
+through a chosen compliance: `A_inertia`, `A_coriolis` and `A_gravity` in
+`pid_params.yaml`, 6×6 admittances in (m/s)/N and (rad/s)/(N·m), one per term so
+each can be switched on by itself.
+
+All three are zero by default, which reproduces the law exactly as it was. That
+is deliberate, and the reason is in §6: this plant has no dynamics for the model
+to correct. The path is verified end to end anyway — with `A_gravity` set to
+1e-4·I, the measured `p` of 44.442 N in z predicts a steady offset of
+44.442 × 1e-4 / `K_p`(z) 7.70 = 0.577 mm, and the arm settles 0.577 mm high in z
+on every sample. With the dynamics forced invalid the term is dropped and the
+offset goes back to 0.006 mm, with a throttled warning.
+
 ### 4.5 Tuning
 
 | File | What |
 |---|---|
-| `sim_control/sim_pid_control/config/pid_params.yaml` | `K_p`/`K_i`/`K_d`, feedforward `N_p`/`N_d`, `workspace_limits`, `arm_max_vel`, 1 kHz loop |
+| `sim_control/sim_pid_control/config/pid_params.yaml` | `K_p`/`K_i`/`K_d`, kinematic feedforward `N_p`/`N_d`, model feedforward `A_inertia`/`A_coriolis`/`A_gravity` (§4.4), `workspace_limits`, `arm_max_vel`, loop rate |
 | `sim_control/sim_admittance_control/config/admittance_params.yaml` | `mass_arm`, `damping_arm`, `stiffness_arm`, `equilibrium_point_spring`, `workspace_limits` |
 | `sim_planning/sim_moveit_config/config/sim_trajectory_control.yaml` | trajectory controller tolerances and publish rates |
 | `sim/sim_bringup/config/initial_pose.yaml` | joint values for the initial-pose helper |
@@ -403,9 +427,47 @@ The same problem solved with k-means instead.
   in the log. `one_brick.world` (cinder block) and `example.world` (ground plane
   only) both load as they are.
 
-* **`/base_pose_ground_truth` is never published.** `general_arm_planning`
-  subscribes to it for the mobile base of the robot it was originally written for.
-  This model has a fixed gantry instead, so the base pose it uses stays at zero.
+* **`/base_pose_ground_truth` moves, and the controllers' feedback does not see
+  it.** `main.xacro` carries a second `libgazebo_ros_p3d.so` plugin on
+  `base_link`, so the topic is published at 50 Hz and carries the arm base's
+  pose and twist in `world`. Measured: the PID node's callback fires 1410 times
+  in one run, with the base motion carried to the end effector coming out at
+  about (0.22, 0.06, -0.07) mm/s - the unactuated gantry creeping, `z_joint`
+  sinking from -0.0009 m to -0.0025 m over 38 s.
+
+  That matters because `ee_state` reports the end-effector pose in `base_link`,
+  so the feedback loop is blind to the base moving: the arm holds its pose
+  relative to a base that is itself drifting. The `N_p` and `N_d` feedforward
+  terms exist for exactly this, and they are live.
+
+  (Both p3d plugins are also named `p3d_base_controller`. Both load and both
+  topics publish, so this is cosmetic, but a duplicate plugin name is not
+  something to copy.)
+
+* **There is no dynamics between the command and the motion, so a dynamics
+  model cannot improve tracking here.** The arm's joints go through a
+  `PositionJointInterface` that Gazebo satisfies kinematically, with no
+  `/gazebo_ros_control/pid_gains` configured. Measured at the SRDF `init` pose
+  with the Cartesian controller holding a zero command: with no external force
+  the joints sit on the commanded value to within 7e-7 rad over 3.5 s, and an
+  external force applied at the end effector displaces it by about 1 um at
+  10 N and about 10 um at 100 N, springing straight back when the force stops.
+  That is an effective stiffness of order 1e7 N/m - rigid, for any purpose here.
+
+  So Lambda, mu and p are correct quantities of the modelled arm (4.4) and
+  there is nothing in this plant for them to correct. The model feedforward in
+  `pid_params.yaml` is wired, verified and switched off by default for that
+  reason. What would change it is giving the joints dynamics of their own:
+  `/gazebo_ros_control/pid_gains` for the six arm joints, which turns the
+  position interface into a PID producing effort, or an `EffortJointInterface`
+  and computed torque. Note that either one brings back real gravity sag, and
+  then the Cartesian controller's integrated setpoint wants the limit on how
+  far it may lead the measurement that `cartesian_velocity_controller.cpp`
+  already flags.
+
+  A 500 N force is a different regime: there the joints deviate by 0.23 rad and
+  the unactuated gantry is flung metres (`y_joint` to -4.5 m). That is not a
+  stiffness measurement, it is Gazebo's kinematic positioning giving up.
 
 * **Nothing in the bringup can set the arm's startup pose.** Two mechanisms try
   to and neither works, so the arm always comes up at the URDF's own zero pose,

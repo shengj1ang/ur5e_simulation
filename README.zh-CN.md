@@ -210,7 +210,8 @@ SRDF 里定义了 `manipulator` 和 `endeffector` 两个组，预设姿态有 `i
   和 `sim_cartesian_velocity_controller_sim` 之间切换。它从
   `/sim_cartesian_velocity_controller_sim/ee_state` 读臂的状态；要换成别的话题
   （真机上的控制器没有 `_sim` 后缀），用 `arm_state_topic` 参数指定。它还需要
-  `/base_pose_ground_truth`，而这个模型里没有移动底盘，所以底盘位姿一直是零。
+  `/base_pose_ground_truth`，这个话题由挂在 `base_link` 上的 p3d 插件发布，确实有数据——
+  龙门没有控制器，所以那个位姿是在漂，而不是不动（见第 6 节）。
 * `twelve_monkeys` 和 `hex_love` 是自包含的：它们只往 RViz 发
   `nav_msgs/Path` 和 marker，完全不需要控制器。
 
@@ -300,6 +301,24 @@ rostopic echo /sim_cartesian_dynamics_controller/ee_dynamics
 像那么回事、但并不是操作空间惯量。请先看 `valid`，不成立时退回到没有模型时的做法。在条件
 良好的位姿上，`inertia · inertia_inv` 与单位阵相差 3e-14，Λ 对称到 6e-16。
 
+**怎么把它当前馈用。** `sim_pid_control` 订阅这个话题，按操作空间的写法构造
+
+```
+F = Λ · a_ff + μ + p
+```
+
+其中 `a_ff` 是"龙门在动的时候，机械臂为了把末端留在原地所必须产生的加速度"，也就是基座
+加速度搬到末端之后取负——和 `N_d` 作用的是同一个信号。机械臂是用速度指令驱动的，所以每个
+力旋量只能以"它通过某个选定的柔顺性会产生多少运动"的形式进入指令：这个柔顺性就是
+`pid_params.yaml` 里的 `A_inertia`、`A_coriolis`、`A_gravity`，6×6 的导纳矩阵，单位是
+(m/s)/N 和 (rad/s)/(N·m)，一项一个，所以每项都能单独打开。
+
+三个默认都是零，也就是完全复现原来的控制律。这是刻意的，原因在第 6 节：这个 plant 里没有
+动力学供模型去纠正。但整条路径还是端到端验证过了——把 `A_gravity` 设成 1e-4·I，实测的
+`p` 在 z 上是 44.442 N，于是预测稳态偏移 44.442 × 1e-4 ÷ `K_p`(z) 7.70 = 0.577 mm，而机械臂
+在每一个采样上都稳定停在 z 方向高 0.577 mm 的位置。把动力学强制标成无效之后，这一项被丢掉、
+偏移回到 0.006 mm，并伴随一条限频警告。
+
 ### 4.5 参数在哪里调
 
 | 文件 | 内容 |
@@ -373,9 +392,35 @@ rostopic echo /sim_cartesian_dynamics_controller/ee_dynamics
   `Error Code 12 Msg: Unable to find uri[model://puzzle_ball_joints]`。
   `one_brick.world`（水泥砖）和 `example.world`（只有地面）都是开箱能加载的。
 
-* **`/base_pose_ground_truth` 没有任何节点发布。** `general_arm_planning` 订阅它，
-  是因为它原本写给一台带移动底盘的机器人。本模型是固定龙门，所以它用到的底盘位姿
-  一直保持为零。
+* **`/base_pose_ground_truth` 是在动的，而控制器的反馈看不见它。** `main.xacro` 里还有
+  第二个 `libgazebo_ros_p3d.so` 插件挂在 `base_link` 上，所以这个话题以 50 Hz 发布，内容是
+  臂基座在 `world` 下的位姿和速度。实测：一次运行里 PID 节点的回调触发了 1410 次，底盘运动
+  搬到末端之后约为 (0.22, 0.06, -0.07) mm/s——没有控制器的龙门在缓慢爬行，`z_joint` 在 38 秒
+  里从 -0.0009 m 沉到 -0.0025 m。
+
+  这件事要紧，是因为 `ee_state` 报的是末端在 `base_link` 下的位姿，于是反馈回路对"基座在动"
+  完全无感：机械臂相对于一个本身在漂的基座保持住了位姿。`N_p` 和 `N_d` 这两个前馈项正是
+  为此存在的，而且它们是活的。
+
+  （两个 p3d 插件的 `name` 都叫 `p3d_base_controller`。两个都加载了、两个话题都在发，所以
+  这只是写法问题，但重名插件不是值得照抄的东西。）
+
+* **指令到运动之间没有动力学，所以动力学模型在这里改善不了跟踪。** 机械臂的关节走
+  `PositionJointInterface`，Gazebo 用运动学方式满足它，而且没有配
+  `/gazebo_ros_control/pid_gains`。在 SRDF 的 `init` 位姿上、笛卡尔控制器保持零指令时实测：
+  没有外力时关节在 3.5 秒里停在指令值上、偏差小于 7e-7 rad；在末端施加外力，10 N 让末端
+  动约 1 um，100 N 约 10 um，撤力立刻弹回。等效刚度量级 1e7 N/m——对这里的任何用途而言
+  就是刚性连接。
+
+  所以 Λ、μ、p 是被建模的那条臂的正确量（见 4.4），但这个 plant 里没有东西给它们去纠正。
+  `pid_params.yaml` 里的模型前馈已经接好、验证过，默认关闭，原因就是这个。要改变这件事，
+  得让关节自己有动力学：给六个臂关节配 `/gazebo_ros_control/pid_gains`（位置接口就变成一个
+  输出力矩的 PID），或者换成 `EffortJointInterface` 做计算力矩。注意这两条路都会把真实的
+  重力下坠带回来，那时候笛卡尔控制器积分出来的设定点就需要
+  `cartesian_velocity_controller.cpp` 里已经提醒过的那个"允许领先测量多少"的限制。
+
+  500 N 是另一个区间：那时关节会偏 0.23 rad，没有控制器的龙门被甩出好几米（`y_joint`
+  到 -4.5 m）。那不是刚度测量，那是 Gazebo 的运动学定位撑不住了。
 
 * **bringup 里没有任何一种办法能设定机械臂的启动位姿。** 有两处尝试去设，两处都无效，
   于是机械臂每次都停在 URDF 自己的零位——完全伸直，也就是肘部奇异位形。

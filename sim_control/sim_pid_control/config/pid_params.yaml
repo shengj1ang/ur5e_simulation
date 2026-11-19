@@ -84,3 +84,58 @@ frequency: 250
 # it is wired up and bounded so that raising K_i to something that bites, order
 # 0.1 to 5, is a parameter change rather than a code change.
 integral_limit: 0.05
+
+# ---------------------------------------------------------------------------
+# Model-based feedforward (operational-space form)
+#
+# The dynamics controller publishes, at the current configuration,
+#   Lambda  the inertia the arm presents at the end effector
+#   mu      the centrifugal and Coriolis wrench
+#   p       the wrench that holds the arm against gravity
+# and this node forms
+#   F = Lambda * a_ff + mu + p
+# with a_ff the acceleration the arm has to produce at the end effector to
+# leave it where it is while the gantry moves its base, i.e. minus the base
+# acceleration carried to the end effector (the same signal N_d acts on).
+#
+# The arm is commanded in velocity, so a wrench can only enter the command as
+# the motion it would produce through a chosen compliance. These three matrices
+# are that compliance - an admittance, in (m/s)/N on the linear components and
+# (rad/s)/(N m) on the angular ones. One per term, so that each can be switched
+# on by itself.
+#
+# They are zero here, which reproduces the law exactly as it was. That is the
+# honest default for this simulation: the joints are driven through a position
+# interface Gazebo satisfies kinematically, so there is no dynamics between the
+# command and the motion for these terms to correct. Measured at the SRDF init
+# pose, 100 N at the end effector displaces it by about 10 um and it springs
+# straight back; with no external force the joints sit on the commanded value
+# to within 7e-7 rad. Turning these up changes the command without changing the
+# plant's behaviour for the better. What they are waiting on is joints with
+# dynamics of their own - gazebo_ros_control pid_gains, or an effort interface.
+#
+# As a starting scale if you do enable them: Lambda is 4 to 9 kg at a working
+# pose, so an admittance of 1/(2*D) with D a damping of a few hundred N s/m
+# puts the inertia term in the mm/s range for the accelerations the gantry
+# produces here.
+A_inertia:  [0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0]
+A_coriolis: [0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0]
+A_gravity:  [0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0,
+             0,0,0,0,0,0]
+
+# Where the dynamics come from. Empty or absent is the same as the default.
+topic_ee_dynamics: /sim_cartesian_dynamics_controller/ee_dynamics

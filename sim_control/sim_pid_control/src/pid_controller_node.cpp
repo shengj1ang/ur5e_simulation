@@ -16,6 +16,10 @@ int main(int argc, char **argv)
   std::vector<double> K_d;
   std::vector<double> N_p;
   std::vector<double> N_d;
+  std::vector<double> A_inertia;
+  std::vector<double> A_coriolis;
+  std::vector<double> A_gravity;
+  std::string topic_ee_dynamics;
   std::vector<double> workspace_limits;
 
   double arm_max_vel;
@@ -64,6 +68,22 @@ int main(int argc, char **argv)
     return -1;
   }
 
+  /// MODEL FEEDFORWARD (optional, zero means the model is not used, which is
+  /// the behaviour of a parameter file written before this existed)
+  const std::vector<double> zero36(36, 0.0);
+  nh.param<std::vector<double> >("A_inertia", A_inertia, zero36);
+  nh.param<std::vector<double> >("A_coriolis", A_coriolis, zero36);
+  nh.param<std::vector<double> >("A_gravity", A_gravity, zero36);
+  nh.param<std::string>("topic_ee_dynamics", topic_ee_dynamics,
+                        "/sim_cartesian_dynamics_controller/ee_dynamics");
+  if (A_inertia.size() != 36 || A_coriolis.size() != 36 || A_gravity.size() != 36)
+  {
+    ROS_ERROR("A_inertia, A_coriolis and A_gravity must each have 36 elements, "
+              "got %lu, %lu, %lu.",
+              A_inertia.size(), A_coriolis.size(), A_gravity.size());
+    return -1;
+  }
+
   /// SAFETY PARAMETERS
   if (!nh.getParam("workspace_limits", workspace_limits))
   {
@@ -108,6 +128,8 @@ int main(int argc, char **argv)
       topic_arm_command,
       topic_arm_state,
       K_p, K_i, K_d, N_p, N_d,
+      A_inertia, A_coriolis, A_gravity,
+      topic_ee_dynamics,
       workspace_limits,
       arm_max_vel,
       arm_acc_upper_limit,

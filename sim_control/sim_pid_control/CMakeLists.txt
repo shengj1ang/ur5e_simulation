@@ -17,6 +17,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   geometry_msgs
   nav_msgs
+  sim_cartesian_velocity_control
 )
 
 set(CMAKE_CXX_FLAGS "-O2 -O3 -std=c++11 -Wall")

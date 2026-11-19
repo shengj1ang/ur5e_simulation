@@ -9,12 +9,17 @@ PIDController::PIDController(ros::NodeHandle &n,
                              std::vector<double> K_d,
                              std::vector<double> N_p,
                              std::vector<double> N_d,
+                             std::vector<double> A_inertia,
+                             std::vector<double> A_coriolis,
+                             std::vector<double> A_gravity,
+                             std::string topic_ee_dynamics,
                              std::vector<double> workspace_limits,
                              double arm_max_vel,
                              double arm_acc_upper_limit,
                              double arm_acc_lower_limit,
                              double integral_limit) : nh_(n), loop_rate_(frequency),
                                                            K_p_(K_p.data()), K_i_(K_i.data()), K_d_(K_d.data()), N_p_(N_p.data()), N_d_(N_d.data()),
+                                                           A_inertia_(A_inertia.data()), A_coriolis_(A_coriolis.data()), A_gravity_(A_gravity.data()),
                                                            integral_limit_(integral_limit),
                                                            workspace_limits_(workspace_limits.data()),
                                                            arm_max_vel_(arm_max_vel),
@@ -25,6 +30,10 @@ PIDController::PIDController(ros::NodeHandle &n,
   sub_arm_state_ = nh_.subscribe(topic_arm_state, 1,
                                  &PIDController::state_arm_callback, this,
                                  ros::TransportHints().reliable().tcpNoDelay());
+
+  sub_ee_dynamics_ = nh_.subscribe(topic_ee_dynamics, 1,
+                                   &PIDController::ee_dynamics_callback, this,
+                                   ros::TransportHints().reliable().tcpNoDelay());
 
   sub_now_equilibrium_ = nh_.subscribe("/now_equilibrium", 1,
                                        &PIDController::now_equilibrium_callback, this,
@@ -60,6 +69,25 @@ PIDController::PIDController(ros::NodeHandle &n,
   last_model_effect_ee_twist_.setZero();
   model_affect_ee_acc_.setZero();
   model_real_.setZero();
+  op_inertia_.setZero();
+  op_coriolis_.setZero();
+  op_gravity_.setZero();
+  dynamics_valid_ = false;
+  last_dynamics_time_ = ros::Time(0);
+  model_feedforward_enabled_ = (A_inertia_.norm() > 0.0) ||
+                               (A_coriolis_.norm() > 0.0) ||
+                               (A_gravity_.norm() > 0.0);
+  if (model_feedforward_enabled_)
+  {
+    ROS_INFO("pid_controller: model feedforward on, admittance norms "
+             "inertia %.4g, coriolis %.4g, gravity %.4g",
+             A_inertia_.norm(), A_coriolis_.norm(), A_gravity_.norm());
+  }
+  else
+  {
+    ROS_INFO("pid_controller: model feedforward off (all three admittances are "
+             "zero); %s is subscribed but not used", topic_ee_dynamics.c_str());
+  }
   base_real_twist_.setZero();
   base_real_position_.setZero();
   base_real_orientation_.setIdentity();
@@ -211,6 +239,39 @@ void PIDController::presuppose_callback(const geometry_msgs::TwistConstPtr msg)
   model_real_ << msg->linear.x, msg->linear.y, msg->linear.z, msg->angular.x, msg->angular.y, msg->angular.z;
 }
 
+void PIDController::ee_dynamics_callback(
+    const sim_cartesian_velocity_control::OperationalSpaceDynamicsConstPtr msg)
+{
+  for (int r = 0; r < 6; r++)
+  {
+    for (int c = 0; c < 6; c++)
+    {
+      op_inertia_(r, c) = msg->inertia[6*r + c];
+    }
+    op_coriolis_(r) = msg->coriolis[r];
+    op_gravity_(r)  = msg->gravity[r];
+  }
+  dynamics_valid_ = msg->valid;
+  last_dynamics_time_ = msg->header.stamp.isZero() ? ros::Time::now()
+                                                   : msg->header.stamp;
+}
+
+/** \brief Whether the last dynamics message can be used this cycle
+ *
+ * Invalid means the publisher said so - at or near a singularity, where the
+ * operational-space inertia does not exist and what it sends instead is a
+ * pseudo-inverse that looks reasonable and is not Lambda. This arm comes up at
+ * exactly such a configuration, so this is the normal case at startup, not an
+ * edge case.
+ */
+bool PIDController::dynamics_usable() const
+{
+  if (!dynamics_valid_ || last_dynamics_time_.isZero())
+    return false;
+  const double age = (ros::Time::now() - last_dynamics_time_).toSec();
+  return (age >= 0.0) && (age <= max_input_gap_);
+}
+
 void PIDController::now_equilibrium_callback(const geometry_msgs::PoseStampedConstPtr msg)
 {
 
@@ -354,7 +415,55 @@ void PIDController::compute_pid(double dt)
   // difference was zero on seven cycles out of eight and a step on the eighth,
   // and it carried an implicit factor of dt, so K_d silently changed meaning
   // whenever the loop frequency changed.
-  arm_desired_twist_final_ = -K_p_ * error - K_i_ * error_integral_ - K_d_ * arm_real_twist_ - N_p_ * model_affect_ee_twist_ - N_d_ * model_affect_ee_acc_;
+  // Model-based feedforward, in the operational-space form
+  //
+  //     F = Lambda * a_ff + mu + p
+  //
+  // with a_ff the acceleration the arm has to produce at the end effector to
+  // leave it where it is while its base moves, i.e. minus the base
+  // acceleration carried to the end effector. The three wrenches are admitted
+  // back to a velocity through A_inertia_, A_coriolis_ and A_gravity_, which
+  // is what makes this an admittance rather than a force law: the arm is
+  // commanded in velocity, so a wrench can only enter as the motion it would
+  // produce through a chosen compliance.
+  //
+  // The terms are separate so that each can be switched on by itself, which is
+  // what the comparison in the next step needs. All three default to zero, so
+  // a parameter file written before this existed reproduces the old law
+  // exactly.
+  //
+  // What this cannot do on the simulation as it stands: the joints are driven
+  // through a position interface that Gazebo satisfies kinematically, so the
+  // path from command to motion has no dynamics in it. Measured at the SRDF
+  // init pose, 100 N applied at the end effector moves it by about 10 um and
+  // it springs straight back, and with no external force the joints sit on the
+  // commanded value to within 7e-7 rad. Lambda, mu and p are real quantities of
+  // the modelled arm, but there is nothing in this plant for them to correct.
+  // Giving the joints their own dynamics - gazebo_ros_control pid_gains, or an
+  // effort interface - is what would make these terms do work.
+  Vector6d model_feedforward_twist = Vector6d::Zero();
+  if (model_feedforward_enabled_)
+  {
+    if (dynamics_usable())
+    {
+      const Vector6d a_ff = -model_affect_ee_acc_;
+      model_feedforward_twist = A_inertia_ * (op_inertia_ * a_ff) +
+                                A_coriolis_ * op_coriolis_ +
+                                A_gravity_ * op_gravity_;
+    }
+    else
+    {
+      ROS_WARN_THROTTLE(5.0, "pid_controller: model feedforward is on but the "
+                             "dynamics are not usable (valid %d, age %.3f s); "
+                             "running on the feedback and kinematic "
+                             "feedforward alone",
+                        static_cast<int>(dynamics_valid_),
+                        last_dynamics_time_.isZero() ? -1.0
+                            : (ros::Time::now() - last_dynamics_time_).toSec());
+    }
+  }
+
+  arm_desired_twist_final_ = -K_p_ * error - K_i_ * error_integral_ - K_d_ * arm_real_twist_ - N_p_ * model_affect_ee_twist_ - N_d_ * model_affect_ee_acc_ + model_feedforward_twist;
 
   last_error_ = error;
   last_arm_desired_twist_final_ = arm_desired_twist_final_;
