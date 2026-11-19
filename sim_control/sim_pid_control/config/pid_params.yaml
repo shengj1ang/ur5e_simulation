@@ -6,6 +6,14 @@
 # difference of two consecutive pose errors), so with the velocity command going
 # almost straight through to the joints the closed loop settles with a time
 # constant of about (1 + K_d)/K_p - roughly 60 ms in x at these values.
+#
+# That description only became true of the running system once the Cartesian
+# controllers started differentiating the measured position for their velocity.
+# Before that, the twist in ee_state came from Gazebo's reported joint velocity,
+# which is unrelated to how the joints are actually moving (README section 6),
+# so K_d was multiplying a constant pose-dependent artefact: it contributed no
+# damping at all and about 0.09 mm of fixed steady-state error instead. If you
+# retune K_d, note that it is doing something now that it was not doing before.
 K_p: [17.70,0,0,0,0,0,
       0,7.70,0,0,0,0,
       0,0,7.70,0,0,0,

@@ -17,6 +17,7 @@
 #include <kdl/chainfksolverpos_recursive.hpp>
 #include <kdl_parser/kdl_parser.hpp>
 
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -31,6 +32,49 @@ public:
 
   bool init(JI *robot, ros::NodeHandle &n);
 
+  /** \brief Read the joint positions from the hardware interface into
+   * joint_msr_.q, and estimate joint_msr_.qdot from them
+   *
+   * The joint velocity reported by the hardware interface is not used, because
+   * under Gazebo it is not the velocity of the joint. gazebo_ros_control's
+   * DefaultRobotHWSim fills it from Gazebo's GetVelocity(), and this model
+   * drives its joints through a PositionJointInterface with no
+   * /gazebo_ros_control/pid_gains, which means SetPosition() moves them
+   * kinematically without ever setting a velocity. What GetVelocity() returns
+   * instead is whatever the constraint solver has, i.e. the velocity the links
+   * would pick up from gravity if the position were not being re-asserted.
+   *
+   * Measured in Gazebo on this model, same run: while arm_joint_controller
+   * swept elbow_joint through 1.565 rad in 11 s - a true 0.1424 rad/s - the
+   * reported velocity averaged 0.00022 rad/s, three orders of magnitude out.
+   * At rest it is not zero either, and it depends on the pose: shoulder_lift
+   * reports 0.0416 rad/s fully extended and 0.0114 rad/s at the SRDF 'init'
+   * pose, in both cases while its position does not move at all to five
+   * decimals. So the signal is not a biased velocity, it is unrelated to the
+   * velocity.
+   *
+   * Differentiating the position is sound here because the position is
+   * trustworthy: the position interface tracks its setpoint exactly, so the
+   * only error in q is Gazebo's own. Note what that means for anything built
+   * on this: in simulation the plant between command and position is close to
+   * a pure integrator, so a differentiated position is close to the commanded
+   * velocity, and a twist computed from it will not expose a tracking failure
+   * that shows up as a lag rather than as a position error. It is the velocity
+   * of the simulated robot, which is what the controllers need, but it is not
+   * independent evidence that the robot did what it was told.
+   *
+   * \param period The duration of an update cycle, as ros_control measures it
+   */
+  void readJointStates(const ros::Duration& period);
+
+  /** \brief Forget the previous position, so that the next readJointStates()
+   * starts the estimate over instead of differentiating across the gap
+   *
+   * Call this from starting(): a controller can be switched in long after the
+   * last time it ran, and the joints may have moved in between.
+   */
+  void resetJointStateEstimate() { have_q_prev_ = false; }
+
 protected:
   ros::NodeHandle nh_;
   KDL::Chain kdl_chain_;
@@ -44,6 +88,11 @@ protected:
   } joint_limits_;
 
   std::vector<typename JI::ResourceHandleType> joint_handles_;
+
+  // Joint velocity estimation - see readJointStates()
+  KDL::JntArray q_prev_;              // position at the previous cycle
+  bool have_q_prev_ = false;          // false until the first cycle is in
+  double velocity_filter_cutoff_ = 0.0;  // Hz; <=0 means no filtering
 };
 
 template <typename JI>
@@ -138,6 +187,19 @@ bool KinematicChainControllerBase<JI>::init(JI *robot, ros::NodeHandle &n)
     return false;
   }
 
+  joint_msr_.resize(kdl_chain_.getNrOfJoints());
+  q_prev_.resize(kdl_chain_.getNrOfJoints());
+  KDL::SetToZero(joint_msr_.q);
+  KDL::SetToZero(joint_msr_.qdot);
+  KDL::SetToZero(q_prev_);
+  have_q_prev_ = false;
+
+  // Cutoff of the first order low pass on the differentiated velocity. The
+  // differentiation is of an exact position in simulation, so the default is
+  // light; on hardware, where the position is quantised by an encoder, it
+  // wants to be lower. 0 or less turns the filter off.
+  nh_.param("velocity_filter_cutoff", velocity_filter_cutoff_, 30.0);
+
   ROS_INFO("tip_name:  %s",tip_name.c_str());
   ROS_INFO("root_name: %s",root_name.c_str());
   ROS_INFO("Number of segments: %d", kdl_chain_.getNrOfSegments());
@@ -195,8 +257,47 @@ bool KinematicChainControllerBase<JI>::init(JI *robot, ros::NodeHandle &n)
   ROS_INFO_STREAM("kdl_chain.getNrOfJoints: " << kdl_chain_.getNrOfJoints());
 
   ROS_INFO("Finished Kinematic Base init");
+  ROS_INFO("Joint velocity is differentiated from position, low pass at %.1f Hz",
+           velocity_filter_cutoff_);
 
   return true;
+}
+
+template <typename JI>
+void KinematicChainControllerBase<JI>::readJointStates(const ros::Duration& period)
+{
+  for (std::size_t i = 0; i < joint_handles_.size(); i++)
+    joint_msr_.q(i) = joint_handles_[i].getPosition();
+
+  if (!have_q_prev_)
+  {
+    for (std::size_t i = 0; i < joint_handles_.size(); i++)
+    {
+      q_prev_(i) = joint_msr_.q(i);
+      joint_msr_.qdot(i) = 0.0;
+    }
+    have_q_prev_ = true;
+    return;
+  }
+
+  const double dt = period.toSec();
+  if (dt <= 0.0)
+    return;   // keep the previous estimate, and q_prev_ with it
+
+  // First order low pass, alpha = dt/(tau+dt) with tau = 1/(2*pi*fc)
+  double alpha = 1.0;
+  if (velocity_filter_cutoff_ > 0.0)
+  {
+    const double tau = 1.0/(2.0*M_PI*velocity_filter_cutoff_);
+    alpha = dt/(tau + dt);
+  }
+
+  for (std::size_t i = 0; i < joint_handles_.size(); i++)
+  {
+    const double raw = (joint_msr_.q(i) - q_prev_(i))/dt;
+    joint_msr_.qdot(i) += alpha*(raw - joint_msr_.qdot(i));
+    q_prev_(i) = joint_msr_.q(i);
+  }
 }
 
 }

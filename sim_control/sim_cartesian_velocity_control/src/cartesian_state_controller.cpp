@@ -40,6 +40,9 @@ bool CartesianStateController::init(hardware_interface::JointStateInterface *rob
  */
 void CartesianStateController::starting(const ros::Time& time) 
 {
+  // The joints may have moved since this controller last ran, so do not
+  // differentiate across the gap.
+  resetJointStateEstimate();
   last_publish_time_ = time;
 }
 
@@ -48,12 +51,12 @@ void CartesianStateController::starting(const ros::Time& time)
  */
 void CartesianStateController::update(const ros::Time& time, const ros::Duration& period) 
 {
-  // Get joint positions
-  for(std::size_t i=0; i < joint_handles_.size(); i++)
-  {
-    joint_msr_.q(i)    = joint_handles_[i].getPosition();
-    joint_msr_.qdot(i) = joint_handles_[i].getVelocity();
-  }
+  // Get joint positions, and the velocity differentiated from them. The
+  // velocity the hardware interface reports is not usable under Gazebo - see
+  // readJointStates() in kinematic_chain_controller_base.h. This also used to
+  // write into a joint_msr_ that nothing had ever resized; the base class
+  // sizes it now.
+  readJointStates(period);
 
   // Compute forward kinematics
   fk_vel_solver_->JntToCart(joint_msr_, x_dot_);

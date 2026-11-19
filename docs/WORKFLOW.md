@@ -177,6 +177,7 @@ copies under `sim_admittance_control` and `sim_cartesian_velocity_control`), in 
 | `ik_sigma_min` | 0.05 | The singular value at which damping starts. Higher damps earlier and more often, at the cost of tracking everywhere; 0.3 already costs 10 % of the commanded speed at a well-conditioned pose. 0 disables damping and gives you the old undamped pseudo-inverse. |
 | `ik_lambda` | 0.2 | How hard it damps once below that threshold. |
 | `max_joint_velocity` | 1.0 | Hard cap on the norm of the joint velocity, applied after the solver. `<=0` disables it. |
+| `velocity_filter_cutoff` | 30.0 | Low pass on the joint velocity, which these controllers differentiate from the measured position because Gazebo's reported velocity is unusable (README §6). `<=0` turns the filter off. Also read by `sim_cartesian_state_controller`. |
 
 No rebuild; re-sync and restart. The controller prints the three values when it
 initialises, and warns (throttled) whenever it is solving near a singularity.
@@ -456,7 +457,8 @@ Two traps worth knowing:
 | MoveIt plans but nothing moves | `arm_joint_controller` is stopped, or something else holds the joints. |
 | The arm thrashes and the gantry flies off on a Cartesian command | The arm is at or near a singularity and `ik_sigma_min` is too low for it. Check the controller's throttled singularity warning. |
 | `-J` in the spawner args changes nothing | It cannot; `gazebo_ros_control` overwrites it. Drive the arm with `arm_joint_controller` instead (README §6). |
-| `ee_state` reports a velocity while the arm is still | Gazebo's reported joint velocities are wrong under a position interface. The pose in that message is fine, the twist is not (README §6). |
+| `/joint_states` shows a velocity while the arm is still | Gazebo's reported joint velocities are wrong under a position interface (README §6). `ee_state`'s twist no longer uses them; `/joint_states` still does. |
+| The PID node never starts, no error | Its constructor blocks until TF `base_link` -> `ee_link` exists. Something has to publish it — `robot_state_publisher`, which full bringup starts and a cut-down rig may not. |
 | `Connection refused` spam from XmlRpc | Relaunched before the previous `rosmaster` finished dying. |
 | `ROS_DISTRO: unbound variable` | `set -u` in a script that sources ROS. Lift `nounset` around the `source`. |
 | The node's log file is empty but it works | Python buffers stdout when redirected. Read `~/.ros/log/latest/rosout.log`. |

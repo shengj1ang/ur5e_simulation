@@ -16,6 +16,11 @@ sim_cartesian_velocity_controller:
   publish_rate: 125
   root_name: base_link
   tip_name: ee_link
+  # Cutoff of the low pass on the joint velocity, which is differentiated
+  # from the measured position because the velocity Gazebo reports is not the
+  # velocity of the joint - see readJointStates() in
+  # kinematic_chain_controller_base.h. 0 or less turns the filter off.
+  velocity_filter_cutoff: 30.0
   # Damped least squares inverse velocity kinematics. ik_sigma_min is the
   # singular value at which damping starts - see the comment on init() in
   # cartesian_velocity_controller.cpp for the measurements these come from.
@@ -30,6 +35,11 @@ sim_cartesian_velocity_controller_sim:
   publish_rate: 125
   root_name: base_link
   tip_name: ee_link
+  # Cutoff of the low pass on the joint velocity, which is differentiated
+  # from the measured position because the velocity Gazebo reports is not the
+  # velocity of the joint - see readJointStates() in
+  # kinematic_chain_controller_base.h. 0 or less turns the filter off.
+  velocity_filter_cutoff: 30.0
   # Damped least squares inverse velocity kinematics. ik_sigma_min is the
   # singular value at which damping starts - see the comment on init() in
   # cartesian_velocity_controller.cpp for the measurements these come from.
@@ -44,6 +54,11 @@ sim_cartesian_state_controller:
     publish_rate: 125
     root_name: base_link
     tip_name: ee_link
+    # Cutoff of the low pass on the joint velocity, which is differentiated
+    # from the measured position because the velocity Gazebo reports is not the
+    # velocity of the joint - see readJointStates() in
+    # kinematic_chain_controller_base.h. 0 or less turns the filter off.
+    velocity_filter_cutoff: 30.0
 
 #Publish wrench ----------------------------------
 force_torque_sensor_controller:

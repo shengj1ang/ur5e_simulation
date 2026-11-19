@@ -99,8 +99,7 @@ bool CartesianVelocityControllerBase<T>::init(T *robot, ros::NodeHandle &n)
   sub_command_ = n.subscribe("command_cart_vel", 5, &CartesianVelocityControllerBase<T>::command_cart_vel,
                              this,ros::TransportHints().reliable().tcpNoDelay());
 
-  // Variable init
-  this->joint_msr_.resize(this->kdl_chain_.getNrOfJoints());
+  // Variable init (joint_msr_ is sized by the base class)
   q_dt_cmd_.resize(this->kdl_chain_.getNrOfJoints());
   q_cmd_.resize(this->kdl_chain_.getNrOfJoints());
   x_dt_des_ = KDL::Twist::Zero();
@@ -127,6 +126,9 @@ void CartesianVelocityControllerBase<T>::starting(const ros::Time& time)
     // controller in does not move the arm.
     q_cmd_(i) = this->joint_handles_[i].getPosition();
   }
+  // The joints may have moved since this controller last ran, so do not
+  // differentiate across the gap.
+  this->resetJointStateEstimate();
   x_dt_des_ = KDL::Twist::Zero();
   last_publish_time_ = time;
 }
@@ -137,12 +139,10 @@ void CartesianVelocityControllerBase<T>::starting(const ros::Time& time)
 template<typename T>
 void CartesianVelocityControllerBase<T>::update(const ros::Time& time, const ros::Duration& period) 
 {
-  // Get joint positions
-  for(std::size_t i=0; i < this->joint_handles_.size(); i++)
-  {
-    this->joint_msr_.q(i)         = this->joint_handles_[i].getPosition();
-    this->joint_msr_.qdot(i)      = this->joint_handles_[i].getVelocity();
-  }
+  // Get joint positions, and the velocity differentiated from them. The
+  // velocity the hardware interface reports is not usable under Gazebo - see
+  // readJointStates() in kinematic_chain_controller_base.h.
+  this->readJointStates(period);
 
   // Compute inverse kinematics velocity solver. A positive return value is
   // E_CONVERGE_PINV_SINGULAR: the solution is usable but damped, i.e. the arm

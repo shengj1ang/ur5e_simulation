@@ -417,21 +417,44 @@ The same problem solved with k-means instead.
   silently. The measured singular values behind these defaults are in the
   comment on `init()` in `cartesian_velocity_controller.cpp`.
 
-* **The joint velocities Gazebo reports are not usable, and `ee_state`'s twist
-  inherits that.** With the arm held still by the position interface,
-  `/joint_states` reports `shoulder_lift_joint` at a mean of 0.0417 rad/s while
-  its position changes by 0.00017 rad over 2.2 s. The joint is not moving. The
-  number is not noise either: it comes back bit-identical (0.041683) across
-  separate runs and across different poses. `ee_state` computes its twist from
-  these velocities through the forward kinematics, so it reports about
-  -0.037 m/s in z while the pose it publishes in the same message is constant
-  to four decimals.
+* **The joint velocities Gazebo reports are not the velocities of the joints.**
+  The controllers in `sim_cartesian_velocity_control` no longer use them — they
+  differentiate the measured position instead — but `/joint_states` still
+  carries the raw value, so anything else that reads it is still reading this.
 
-  The pose half of `ee_state` is trustworthy, the twist half is not. Anything
-  that needs the end-effector velocity — the derivative term in
-  `sim_pid_control`, and any dynamics model that wants q̇ — should differentiate
-  the reported position instead, unless the measurement is fixed at the
-  hardware interface.
+  `gazebo_ros_control` fills the velocity from Gazebo's `GetVelocity()`. This
+  model drives its joints through a `PositionJointInterface` with no
+  `/gazebo_ros_control/pid_gains`, so `SetPosition()` moves them kinematically
+  and never sets a velocity; what `GetVelocity()` returns is the velocity the
+  links would pick up from gravity if the position were not being re-asserted.
+  Measured in one run: while `arm_joint_controller` swept `elbow_joint` through
+  1.565 rad in 11 s — a true 0.1424 rad/s — the reported velocity averaged
+  **0.00022 rad/s**, three orders of magnitude out. At rest it is not zero
+  either, and it depends on the pose: `shoulder_lift_joint` reads 0.0416 rad/s
+  fully extended and 0.0114 rad/s at the SRDF `init` pose, both while its
+  position does not move at all to five decimals. It is not a biased velocity,
+  it is unrelated to the velocity.
+
+  `ee_state` used to compute its twist from this. Commanding 0.02 m/s along x
+  it reported (+0.0045, 0, -0.0075) m/s — 23 % of the actual speed, with a z
+  component while z was not moving. It now reports (+0.0199, +0.0003, -0.0000)
+  against a true (+0.0200, 0, 0), and 0.0000 at rest.
+
+  This was not harmless. `sim_pid_control` feeds `ee_state`'s twist into its
+  derivative term, so `K_d` was multiplying a constant artefact. Measured on
+  the same rig, holding a setpoint: **0.090 mm of steady-state error before,
+  0.01–0.04 mm after**, and before it was a fixed offset where after it is
+  noise. 0.090 mm is also what the term predicts — `K_d` 0.1 against the
+  -0.0075 m/s artefact, divided by `K_p` 7.7, is 0.098 mm.
+
+  One caveat on the replacement. The position interface tracks its setpoint
+  exactly, so in simulation the plant between command and position is close to
+  a pure integrator, and a velocity differentiated from that position is close
+  to the velocity that was commanded. It is the velocity of the simulated
+  robot, which is what the controllers need, but it is not independent evidence
+  that the robot did what it was told. `velocity_filter_cutoff` (30 Hz) sets
+  the low pass on it; the residual ripple at that setting is 0.6 mm/s on a
+  20 mm/s command.
 
 * **Parallel builds used to fail** with
   `mission_mode/mode_switch.h: No such file or directory`. The four executables in
