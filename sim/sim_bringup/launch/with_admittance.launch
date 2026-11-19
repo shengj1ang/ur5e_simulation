@@ -34,6 +34,15 @@
 
 
     <!-- Run a python script to the send a service call to gazebo_ros to spawn a URDF robot -->
+    <!-- Joint-level PID gains for gazebo_ros_control. These must be on the
+         parameter server before the model is spawned, because the plugin reads
+         them when it loads. Without them the arm's joints are positioned
+         kinematically and have no dynamics at all; see the file's header.
+         Pass joint_pid_gains:=false for the old behaviour. -->
+    <arg name="joint_pid_gains" default="true"/>
+    <rosparam file="$(find sim_bringup)/config/gazebo_joint_pid_gains.yaml"
+              command="load" if="$(arg joint_pid_gains)"/>
+
     <node name="urdf_spawner" pkg="gazebo_ros" type="spawn_model" respawn="false" output="screen"
     args="-urdf -model sim -param robot_description
           -x 0

@@ -343,9 +343,13 @@ through a chosen compliance: `A_inertia`, `A_coriolis` and `A_gravity` in
 `pid_params.yaml`, 6×6 admittances in (m/s)/N and (rad/s)/(N·m), one per term so
 each can be switched on by itself.
 
-All three are zero by default, which reproduces the law exactly as it was. That
-is deliberate, and the reason is in §6: this plant has no dynamics for the model
-to correct. The path is verified end to end anyway — with `A_gravity` set to
+All three are zero by default, which reproduces the law exactly as it was. The
+plant does have dynamics now (§6), so that is no longer because there is nothing
+to correct; it is because `a_ff` is the base acceleration and the gantry is held
+still, so the inertia term has no signal to act on until something drives those
+axes — which their raised effort limits now make possible. The gravity term is a
+constant that the outer loop already nulls to 2 um. The path is verified end to
+end — with `A_gravity` set to
 1e-4·I, the measured `p` of 44.442 N in z predicts a steady offset of
 44.442 × 1e-4 / `K_p`(z) 7.70 = 0.577 mm, and the arm settles 0.577 mm high in z
 on every sample. With the dynamics forced invalid the term is dropped and the
@@ -359,6 +363,7 @@ offset goes back to 0.006 mm, with a throttled warning.
 | `sim_control/sim_admittance_control/config/admittance_params.yaml` | `mass_arm`, `damping_arm`, `stiffness_arm`, `equilibrium_point_spring`, `workspace_limits` |
 | `sim_planning/sim_moveit_config/config/sim_trajectory_control.yaml` | trajectory controller tolerances and publish rates |
 | `sim/sim_bringup/config/initial_pose.yaml` | joint values for the initial-pose helper |
+| `sim/sim_bringup/config/gazebo_joint_pid_gains.yaml` | per-joint PID gains for gazebo_ros_control, i.e. how stiff the arm is (§6) |
 | `sim_control/*/config/sim_vel_controller.yaml` | `ik_sigma_min`/`ik_lambda`/`max_joint_velocity`, `velocity_filter_cutoff`, and the dynamics controller's `sigma_min`/`pinv_rcond`/`include_tip_payload`/`gravity` |
 
 All gain matrices are 6×6, written out row-major as a flat list.
@@ -444,30 +449,66 @@ The same problem solved with k-means instead.
   topics publish, so this is cosmetic, but a duplicate plugin name is not
   something to copy.)
 
-* **There is no dynamics between the command and the motion, so a dynamics
-  model cannot improve tracking here.** The arm's joints go through a
-  `PositionJointInterface` that Gazebo satisfies kinematically, with no
-  `/gazebo_ros_control/pid_gains` configured. Measured at the SRDF `init` pose
-  with the Cartesian controller holding a zero command: with no external force
-  the joints sit on the commanded value to within 7e-7 rad over 3.5 s, and an
-  external force applied at the end effector displaces it by about 1 um at
-  10 N and about 10 um at 100 N, springing straight back when the force stops.
-  That is an effective stiffness of order 1e7 N/m - rigid, for any purpose here.
+* **The arm's joints are now servos, not teleports, and that change pulled
+  three other things with it.** `sim_bringup/config/gazebo_joint_pid_gains.yaml`
+  gives the six arm joints `/gazebo_ros_control/pid_gains`, so a position
+  command runs through a per-joint PID whose output is a torque clamped to the
+  URDF effort limit instead of being satisfied by Gazebo kinematically. Pass
+  `joint_pid_gains:=false` to the bringup for the old behaviour.
 
-  So Lambda, mu and p are correct quantities of the modelled arm (4.4) and
-  there is nothing in this plant for them to correct. The model feedforward in
-  `pid_params.yaml` is wired, verified and switched off by default for that
-  reason. What would change it is giving the joints dynamics of their own:
-  `/gazebo_ros_control/pid_gains` for the six arm joints, which turns the
-  position interface into a PID producing effort, or an `EffortJointInterface`
-  and computed torque. Note that either one brings back real gravity sag, and
-  then the Cartesian controller's integrated setpoint wants the limit on how
-  far it may lead the measurement that `cartesian_velocity_controller.cpp`
-  already flags.
+  What it buys, measured at the SRDF `init` pose with the Cartesian controller
+  holding a zero command and a force applied at the end effector:
 
-  A 500 N force is a different regime: there the joints deviate by 0.23 rad and
-  the unactuated gantry is flung metres (`y_joint` to -4.5 m). That is not a
-  stiffness measurement, it is Gazebo's kinematic positioning giving up.
+  | | kinematic (before) | servo (now) |
+  |---|---|---|
+  | 10 N | 1 um | 3.9 mm |
+  | 50 N | ~10 um | 18.7 mm |
+  | 100 N | ~10 um | 35.6 mm |
+  | effective stiffness | ~1e7 N/m | 2810 N/m |
+
+  Linear in the force, where before it was not a spring at all. The arm also
+  droops 29 mm at that pose under its own weight, with each joint sagging by
+  its gravity torque over its p gain - 20 mrad by construction, measured 20
+  mrad at the elbow and 6.5 mrad at shoulder_lift. The closed loop still holds
+  2 um of steady-state error and settles a 10 mm step inside 0.5 s, because the
+  velocity command integrates into a position offset that takes the sag out.
+
+  Three things had to change with it, none of them optional:
+
+  **The gantry had to be able to push back.** Its axes were limited to an effort
+  of 30, less than the 174 N the arm weighs (z had been raised to 3e7 to paper
+  over that). Nothing drives them, so gazebo_ros_control leaves them in VELOCITY
+  mode, where Gazebo's joint motor holds zero velocity up to that effort - a
+  brake weaker than its own load. It did not matter while the arm exerted no
+  reaction on its base; with the gains it does, and shoulder_pan can push 150 Nm
+  against r_joint's 30. Measured with the limits still at 30: r_joint span past
+  1.2 rad in the first seconds and shoulder_pan sat saturated chasing it. x, y
+  and z are now 2000 and r is 500, and the gantry holds to 0.003 rad and 0.03 mm.
+
+  **The arm joint limits had to come inside 2pi.** `main.xacro` passed
+  `joint_limited="false"`, which makes the macro ignore the limits given and
+  hard-code every arm joint to ±2pi, a span of 4pi. gazebo_ros_control computes
+  a revolute joint's error with
+  `angles::shortest_angular_distance_with_limits`, which normalises the span and
+  so cannot represent a range wider than 2pi: with ±2pi it reads a small error
+  as a nearly-full-turn one. Harmless while the error was never used as a
+  control signal. With the gains, shoulder_pan - the one arm joint gravity puts
+  no torque on, so nothing masked it - wound a full turn into its lower limit
+  and sat there saturated at -150 Nm. The limits are ±3.0 rad now, 172 degrees,
+  wider than anything in this project asks for.
+
+  **The Cartesian controller's setpoint needed anti-windup.** It integrates its
+  own position command, which could not drift from the measurement while the
+  plant was kinematic. A servo with a torque limit can fall behind, and then the
+  integral climbs while the joint stands still. `max_command_lead` (0.1 rad)
+  clamps the command to within that of the measurement and warns, throttled. It
+  did not fire in any of the runs above, which is what a backstop should do.
+
+  The gains are sized from saturation, not bandwidth: p is the gravity torque
+  over the sag allowed (20 mrad), d is 2*J*sqrt(p/J). A first attempt sized for
+  a 60 rad/s loop saturated at 11 mrad of error, and the arm and the gantry
+  slammed against each other at full torque from the first physics step. The
+  file has the table.
 
 * **Nothing in the bringup can set the arm's startup pose.** Two mechanisms try
   to and neither works, so the arm always comes up at the URDF's own zero pose,

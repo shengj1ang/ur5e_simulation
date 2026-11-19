@@ -1,0 +1,69 @@
+# Joint-level PID gains for gazebo_ros_control.
+#
+# What this changes
+# ----------------
+# Without these, DefaultRobotHWSim satisfies a PositionJointInterface command by
+# calling Gazebo's SetPosition, which moves the joint kinematically: it goes
+# exactly where it is told, gravity does not pull it down, and an external force
+# barely moves it. Measured in that mode at the SRDF 'init' pose, a 100 N force
+# at the end effector displaced it by about 10 um and it sprang straight back -
+# an effective stiffness of order 1e7 N/m. There was no dynamics between the
+# command and the motion, so there was nothing for a dynamics model to feed
+# forward against.
+#
+# With these, the same command runs through a per-joint PID whose output is a
+# torque, clamped to the joint's effort limit from the URDF (150 Nm on
+# shoulder_pan, shoulder_lift and elbow, 28 Nm on the three wrists). The arm
+# then has the inertia and the weight the model describes, it sags under gravity,
+# and a disturbance deflects it. That is the point.
+#
+# These parameters must be on the server before the model is spawned, because
+# the plugin reads them when it loads. The bringup launch files load this file
+# ahead of urdf_spawner; pass joint_pid_gains:=false to leave it out and get the
+# old kinematic behaviour back.
+#
+# How the numbers were chosen
+# ---------------------------
+# The binding constraint is saturation, not bandwidth. The PID output is clamped
+# to the joint's effort limit, and above that clamp the derivative term cannot
+# damp anything, so a servo that saturates easily does not behave like a servo
+# at all. A first attempt sized for a 60 rad/s loop (p of 13000 on
+# shoulder_lift) saturated at an error of 11 mrad, which is nothing: the arm and
+# the gantry slammed against each other at full torque from the first physics
+# step, shoulder_pan reporting 17 rad/s and r_joint -500 Nm in the very first
+# sample, and the trajectory controller aborted on the tracking error.
+#
+# So p is set from the steady sag instead: p = (gravity torque to hold) / (sag
+# allowed), with a sag of 20 mrad, and d = 2 J w for critical damping with
+# w = sqrt(p/J). J is the largest diagonal entry of the joint-space inertia
+# matrix over the poses this arm works in, measured with KDL on this URDF
+# including the 0.767 kg of coupler, gripper and camera past ee_link:
+#
+#   joint            J (kg m^2)  gravity (Nm)      p      d    w      saturates
+#   shoulder_pan        3.98        0.0          3120   223   28      48 mrad
+#   shoulder_lift       3.73       58.5          2925   209   28      51 mrad
+#   elbow               0.81       18.8           940    55   34     160 mrad
+#   wrist_1             0.056       1.39           70   3.9   35     400 mrad
+#   wrist_2             0.036       0.0            50   2.7   37     560 mrad
+#   wrist_3             0.0097      0.38           19  0.85   44    1470 mrad
+#
+# shoulder_pan carries no gravity torque, so its p is scaled from
+# shoulder_lift's by the inertia ratio to keep the two loops at the same speed.
+# At w of 28 to 44 rad/s the 1 ms physics step gives w*dt below 0.05, far from
+# the stability limit of the discretisation, and the servo stays linear over an
+# error band of 48 mrad or more - wide enough for the moves this arm makes.
+#
+# The integral gain is deliberately zero. With it, the arm would hold position
+# against gravity by itself and the steady sag would vanish; without it the sag
+# is p^-1 times the gravity torque, 20 mrad per joint by construction, and the
+# gravity wrench the dynamics controller publishes has something to correct.
+# Set i and i_clamp if you want the joint loop to do that job instead.
+gazebo_ros_control:
+  pid_gains:
+    shoulder_pan_joint:  {p: 3120.0, i: 0.0, d: 223.0, i_clamp: 0.0}
+    shoulder_lift_joint: {p: 2925.0, i: 0.0, d: 209.0, i_clamp: 0.0}
+    elbow_joint:         {p:  940.0, i: 0.0, d:  55.0, i_clamp: 0.0}
+    wrist_1_joint:       {p:   70.0, i: 0.0, d:   3.9, i_clamp: 0.0}
+    wrist_2_joint:       {p:   50.0, i: 0.0, d:   2.7, i_clamp: 0.0}
+    wrist_3_joint:       {p:   19.0, i: 0.0, d:  0.85, i_clamp: 0.0}
+

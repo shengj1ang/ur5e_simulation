@@ -90,6 +90,9 @@ protected:
   double ik_sigma_min_;         // singular value below which damping starts
   double ik_lambda_;            // damping factor at the singularity
   double max_joint_velocity_;   // rad/s, on the norm of q_dt_cmd_; <=0 disables
+  // How far the integrated position command may get ahead of the measured
+  // position, in rad; <=0 disables the limit. See writeVelocityCommands().
+  double max_command_lead_;
 
   boost::shared_ptr<realtime_tools::RealtimePublisher<nav_msgs::Odometry> > realtime_pub_;
 

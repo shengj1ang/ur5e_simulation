@@ -10,13 +10,27 @@
 
     <xacro:d435_gazebo />
 
-    <xacro:ur5e_robot prefix="" joint_limited="false"
-        shoulder_pan_lower_limit="${-2.0*pi}" shoulder_pan_upper_limit="${2.0*pi}"
-        shoulder_lift_lower_limit="${-2.0*pi}" shoulder_lift_upper_limit="${2.0*pi}"
-        elbow_joint_lower_limit="${-2.0*pi}" elbow_joint_upper_limit="${2.0*pi}"
-        wrist_1_lower_limit="${-2.0*pi}" wrist_1_upper_limit="${2.0*pi}"
-        wrist_2_lower_limit="${-2.0*pi}" wrist_2_upper_limit="${2.0*pi}"
-        wrist_3_lower_limit="${-2.0*pi}" wrist_3_upper_limit="${2.0*pi}" />
+    <!-- joint_limited used to be false, which makes the macro ignore the limits
+         passed here and hard-code every arm joint to +/-2*pi, a span of 4*pi.
+         gazebo_ros_control computes the position error of a revolute joint with
+         angles::shortest_angular_distance_with_limits, which normalises the
+         span and therefore cannot represent a range wider than 2*pi: with
+         +/-2*pi it reads a small error as a nearly-full-turn one. That was
+         harmless while the joints were positioned kinematically and the error
+         was never used, but with joint PID gains configured the error is the
+         control signal, and shoulder_pan - the one arm joint gravity puts no
+         torque on, so nothing masked it - wound a full turn into its lower
+         limit and sat there saturated at -150 Nm.
+
+         A span under 2*pi fixes it. 3.0 rad each way is 172 degrees, more than
+         anything in this project asks for (the SRDF poses stay inside 1.57). -->
+    <xacro:ur5e_robot prefix="" joint_limited="true"
+        shoulder_pan_lower_limit="-3.0" shoulder_pan_upper_limit="3.0"
+        shoulder_lift_lower_limit="-3.0" shoulder_lift_upper_limit="3.0"
+        elbow_joint_lower_limit="-3.0" elbow_joint_upper_limit="3.0"
+        wrist_1_lower_limit="-3.0" wrist_1_upper_limit="3.0"
+        wrist_2_lower_limit="-3.0" wrist_2_upper_limit="3.0"
+        wrist_3_lower_limit="-3.0" wrist_3_upper_limit="3.0" />
 
 
     <material name="Aquamarine1">
@@ -103,12 +117,24 @@
         </surface>
     </link>
 
+    <!-- Gantry axes. Nothing drives them - machine_tool_control is not in this
+         repository - so gazebo_ros_control leaves them in its VELOCITY mode,
+         where Gazebo's own joint motor holds the commanded velocity of zero up
+         to a force of the joint's effort limit. That limit was 30, and the arm
+         alone weighs 174 N, so the brake was weaker than its own load; z had
+         been raised to 3e7 to paper over it. None of it mattered while the
+         arm's joints were positioned kinematically, because then the arm
+         exerted no reaction on its base at all. With joint PID gains
+         configured it does, and shoulder_pan can push 150 Nm against r_joint's
+         30: measured, r_joint span past 1.2 rad within the first seconds and
+         shoulder_pan sat saturated chasing it. These are machine-tool numbers,
+         above any reaction the arm can produce and not absurd. -->
     <joint name="x_joint" type="prismatic">
         <origin xyz="0 0 0.1" rpy="0 0 0"></origin>
         <parent link="base_table" />
         <child link="x_axle" />
         <axis xyz="1 0 0" />
-        <limit effort="30" velocity="100.0" lower="-5" upper="5" />
+        <limit effort="2000" velocity="100.0" lower="-5" upper="5" />
     </joint>
 
     <link name="y_axle">
@@ -148,7 +174,7 @@
         <parent link="x_axle" />
         <child link="y_axle" />
         <axis xyz="0 1 0" />
-        <limit effort="30" velocity="100.0" lower="-5" upper="5" />
+        <limit effort="2000" velocity="100.0" lower="-5" upper="5" />
     </joint>
 
     <link name="z_axle">
@@ -188,7 +214,7 @@
         <parent link="y_axle" />
         <child link="z_axle" />
         <axis xyz="0 0 1" />
-        <limit effort="30000000" velocity="100.0" lower="-0.5" upper="5.0" />
+        <limit effort="2000" velocity="100.0" lower="-0.5" upper="5.0" />
     </joint>
 
     <link name="plate">
@@ -228,7 +254,7 @@
         <parent link="z_axle" />
         <child link="plate" />
         <axis xyz="0 0 1" />
-        <limit effort="30" velocity="100.0" lower="-6.28" upper="6.28" />
+        <limit effort="500" velocity="100.0" lower="-6.28" upper="6.28" />
     </joint>
 
     <joint name="associate_joint" type="fixed">

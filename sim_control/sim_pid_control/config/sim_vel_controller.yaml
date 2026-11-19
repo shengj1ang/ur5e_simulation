@@ -29,6 +29,13 @@ sim_cartesian_velocity_controller:
   ik_sigma_min: 0.05
   ik_lambda: 0.2
   max_joint_velocity: 1.0
+  # How far the integrated position command may get ahead of the measured
+  # position, in rad. This is anti-windup for the integrator in
+  # writeVelocityCommands(): with gazebo_ros_control pid gains configured a
+  # joint is a real servo with a torque limit and can fall behind, and
+  # without this the command would keep climbing and the joint would jump
+  # when it caught up. <=0 disables.
+  max_command_lead: 0.1
 
 sim_cartesian_velocity_controller_sim:
   type: cartesian_controller/CartesianVelocityControllerSim
@@ -48,6 +55,13 @@ sim_cartesian_velocity_controller_sim:
   ik_sigma_min: 0.05
   ik_lambda: 0.2
   max_joint_velocity: 1.0
+  # How far the integrated position command may get ahead of the measured
+  # position, in rad. This is anti-windup for the integrator in
+  # writeVelocityCommands(): with gazebo_ros_control pid gains configured a
+  # joint is a real servo with a torque limit and can fall behind, and
+  # without this the command would keep climbing and the joint would jump
+  # when it caught up. <=0 disables.
+  max_command_lead: 0.1
 
 sim_cartesian_state_controller:
     type: cartesian_controller/CartesianStateController

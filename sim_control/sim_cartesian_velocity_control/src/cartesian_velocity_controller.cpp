@@ -75,6 +75,7 @@ bool CartesianVelocityControllerBase<T>::init(T *robot, ros::NodeHandle &n)
   n.param("ik_sigma_min", ik_sigma_min_, 0.05);
   n.param("ik_lambda", ik_lambda_, 0.2);
   n.param("max_joint_velocity", max_joint_velocity_, 1.0);
+  n.param("max_command_lead", max_command_lead_, 0.1);
 
   // 'eps' of the wdls solver is the singular value threshold, ik_sigma_min.
   KDL::ChainIkSolverVel_wdls *wdls =
@@ -82,8 +83,9 @@ bool CartesianVelocityControllerBase<T>::init(T *robot, ros::NodeHandle &n)
   wdls->setLambda(ik_lambda_);
   ik_vel_solver_.reset(wdls);
   ROS_INFO("Cartesian velocity controller: damped IK, sigma_min %.4f, lambda "
-           "%.4f, joint velocity capped at %.3f rad/s",
-           ik_sigma_min_, ik_lambda_, max_joint_velocity_);
+           "%.4f, joint velocity capped at %.3f rad/s, command lead limited to "
+           "%.3f rad",
+           ik_sigma_min_, ik_lambda_, max_joint_velocity_, max_command_lead_);
   fk_vel_solver_.reset(new KDL::ChainFkSolverVel_recursive(this->kdl_chain_));
   fk_pos_solver_.reset(new KDL::ChainFkSolverPos_recursive(this->kdl_chain_));
 
@@ -272,17 +274,49 @@ void CartesianVelocityController::writeVelocityCommands(const ros::Duration& per
  * 0.0000 rad over 4.7 s, which is what isolated the cause to this line.
  *
  * Integrating the command keeps the setpoint independent of the measurement, so
- * zero command means hold. The position interface in Gazebo tracks a position
- * setpoint exactly, so the two cannot drift apart here; on hardware, or with
- * gazebo_ros_control PID gains configured, a blocked joint would make the
- * commanded position run away from the real one, and that case wants a limit on
- * how far q_cmd_ may lead the measurement.
+ * zero command means hold.
+ *
+ * Nothing then stops the two from drifting apart, which is what
+ * max_command_lead is for. A joint that cannot follow - blocked, saturated
+ * against its effort limit, or simply lagging - leaves the integral climbing
+ * while the joint stands still, and when the obstruction clears the joint jumps
+ * to wherever the integral has got to. Clamping q_cmd_ to within
+ * max_command_lead of the measurement is the position-loop equivalent of
+ * anti-windup: the command waits for the joint instead of running away from it.
+ *
+ * This mattered less when gazebo_ros_control had no pid_gains for these joints,
+ * because then Gazebo satisfied the position command kinematically and the two
+ * could not diverge; with the gains in
+ * sim_bringup/config/gazebo_joint_pid_gains.yaml the joint is a real servo with
+ * a torque limit, and it can fall behind.
  */
 void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Duration& period)
 {
   for(std::size_t i=0; i < this->joint_handles_.size(); i++)
   {
     q_cmd_(i) += q_dt_cmd_(i)*period.toSec();
+
+    if (max_command_lead_ > 0.0)
+    {
+      const double measured = this->joint_handles_[i].getPosition();
+      if (q_cmd_(i) > measured + max_command_lead_)
+      {
+        q_cmd_(i) = measured + max_command_lead_;
+        ROS_WARN_THROTTLE(5.0, "Cartesian velocity controller: %s cannot follow, "
+                               "holding the command %.4f rad ahead of it",
+                          this->joint_handles_[i].getName().c_str(),
+                          max_command_lead_);
+      }
+      else if (q_cmd_(i) < measured - max_command_lead_)
+      {
+        q_cmd_(i) = measured - max_command_lead_;
+        ROS_WARN_THROTTLE(5.0, "Cartesian velocity controller: %s cannot follow, "
+                               "holding the command %.4f rad behind it",
+                          this->joint_handles_[i].getName().c_str(),
+                          max_command_lead_);
+      }
+    }
+
     this->joint_handles_[i].setCommand(q_cmd_(i));
   }
 }
