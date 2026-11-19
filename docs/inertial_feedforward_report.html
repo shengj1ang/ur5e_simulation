@@ -3,132 +3,210 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>UR5e 基座平移扰动的惯性前馈验证</title>
+  <title>基于动力学前馈的 UR5e 末端抗扰控制</title>
   <style>
-    :root { color-scheme: light; --ink: #1e2730; --muted: #53626f; --accent: #005880; --rule: #d8e0e6; }
+    :root { color-scheme: light; }
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 0 1.25rem; color: var(--ink); background: #fff;
-      font: 16px/1.75 "Noto Serif SC", "Songti SC", "SimSun", serif; }
-    main { max-width: 880px; margin: 3rem auto 4rem; }
-    header { border-bottom: 1px solid var(--rule); margin-bottom: 1.75rem; padding-bottom: 1.25rem; }
-    h1, h2, thead, caption { font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif; }
-    h1 { font-size: clamp(1.75rem, 4.8vw, 2.55rem); letter-spacing: -.025em; line-height: 1.27; margin: 0; }
-    h2 { color: var(--accent); font-size: 1.24rem; margin: 2.05rem 0 .52rem; }
-    p { margin: .55rem 0 .85rem; }
-    header p, figcaption, footer { color: var(--muted); }
-    header p { margin: .65rem 0 0; }
-    .table-frame { overflow-x: auto; margin: 1rem 0 1.3rem; }
-    table { width: 100%; border-collapse: collapse; text-align: right; font-variant-numeric: tabular-nums; }
-    caption { text-align: left; font-size: .96rem; font-weight: 600; margin-bottom: .55rem; }
-    th, td { padding: .42rem .63rem; white-space: nowrap; border-bottom: 1px solid var(--rule); }
-    thead { background: #f3f6f8; font-size: .9rem; }
-    figure { margin: 1.45rem 0 1.65rem; break-inside: avoid; }
+    body { margin: 0; color: #1b1b1b; background: #fff;
+      font: 16px/1.75 "Times New Roman", "Noto Serif SC", "SimSun", "Songti SC", serif; }
+    article { max-width: 53rem; margin: 2.5rem auto 3rem; padding: 0 1.5rem; }
+    header { text-align: center; margin-bottom: 1.65rem; }
+    h1 { margin: 0; font-size: clamp(1.52rem, 4vw, 2.15rem); line-height: 1.4; }
+    header p { color: #444; font-size: .94rem; margin: .5rem 0 0; }
+    h2 { margin: 1.55rem 0 .4rem; font-size: 1.24rem; line-height: 1.5; }
+    h2 span { margin-left: .55rem; font-size: .92em; font-weight: normal; color: #424242; }
+    p { margin: .46rem 0; }
+    a { color: #262626; text-underline-offset: .13em; }
+    .equation { display: grid; grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center; column-gap: .65rem; margin: .64rem 0; }
+    .equation .expression { overflow-x: auto; overflow-y: hidden; padding: .25rem 0; }
+    math { font-family: "Cambria Math", "STIX Two Math", math; }
+    mtd:first-child { text-align: right; }
+    mtd + mtd { text-align: left; }
+    .equation .number { text-align: right; font-size: .94rem; }
+    .table-frame { overflow-x: auto; margin: .75rem 0; }
+    table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: .94rem; }
+    caption { caption-side: top; font-weight: bold; text-align: left; margin-bottom: .36rem; }
+    th, td { text-align: right; padding: .32rem .52rem; white-space: nowrap; }
+    th:first-child { text-align: left; }
+    thead { border-top: 1.4px solid #222; border-bottom: .75px solid #555; }
+    tbody { border-bottom: 1.4px solid #222; }
+    figure { margin: .85rem auto 1rem; break-inside: avoid; }
+    figure.rate { max-width: 37rem; }
     figure img { display: block; width: 100%; height: auto; }
-    figcaption { margin-top: .42rem; font-size: .9rem; line-height: 1.55; }
-    footer { border-top: 1px solid var(--rule); margin-top: 1.75rem; padding-top: .75rem; font-size: .87rem; }
-    code { font-family: Consolas, monospace; font-size: .87em; overflow-wrap: anywhere; }
-    a { color: var(--accent); text-underline-offset: .14em; }
+    figcaption { font-size: .89rem; margin: .28rem 0 0; line-height: 1.55; }
+    .reference { margin-top: 1.4rem; border-top: .65px solid #888; padding-top: .55rem; font-size: .87rem; }
+    .reference p { margin: .35rem 0; }
+    details { font-size: .88rem; margin: .72rem 0; }
+    summary { cursor: pointer; }
+    code { font-family: Consolas, monospace; font-size: .88em; overflow-wrap: anywhere; }
+    @media (max-width: 38rem) {
+      article { margin-top: 1.5rem; padding: 0 .86rem; }
+      h2 span { margin-left: .32rem; }
+    }
     @media print {
-      main { margin: 0; max-width: none; }
-      body { padding: 0; font-size: 10.5pt; }
+      article { margin: 0 auto; padding: 0; max-width: none; }
+      body { font-size: 10.5pt; }
       h2 { break-after: avoid; }
-      figure img { max-height: 10.5cm; object-fit: contain; }
+      figure img { max-height: 9cm; object-fit: contain; }
     }
   </style>
 </head>
 <body>
-<main>
+<article>
   <header>
-    <h1>UR5e 基座平移扰动的惯性前馈验证</h1>
-    <p>ROS Noetic · Gazebo 11 · 同一仿真内配对试验 · 2026 年 11 月 19 日</p>
+    <h1>基于动力学前馈的 UR5e 末端抗扰控制</h1>
+    <p>基座平移扰动下的 Gazebo 仿真试验</p>
   </header>
+
   <section aria-labelledby="introduction">
-    <h2 id="introduction">引言</h2>
-    <p>龙门平移时，控制目标是将 UR5e 末端保持在世界坐标系的固定位置。本试验检验在既有前馈反馈回路上加入惯性补偿后，末端沿扰动方向的基频位移是否下降。</p>
-  </section>
-  <section aria-labelledby="methodology">
-    <h2 id="methodology">方法</h2>
-    <p>由末端零加速度约束求关节参考加速度。含末端负载的 KDL 模型计算参考惯性力矩，并用等效加速度场计算基座耦合力矩。合力矩通过离散逆 PD 换算为位置偏置。逆解受阻尼或关节速度实质限幅时，暂停惯性请求。</p>
-    <p>在同一次 headless 仿真中保持 SRDF <code>init</code> 附近的世界系目标，施加峰值 20 mm 的 Y 轴扰动。在 1、3、5 Hz 各做五组 OFF→ON，OFF 重映射加速度话题。每条腿取 4 s 整周期窗口，对世界系位移拟合单频、常数项与线性漂移。末端与基座基频幅值之比为传递率，配对差定义为 OFF 减 ON。1 Hz 的解析加速度峰值为 0.79 m/s²，是 5 Hz 的 1/25，用作低加速度对照。</p>
-  </section>
-  <section aria-labelledby="results">
-    <h2 id="results">结果</h2>
-    <div class="table-frame"><table>
-      <caption>表 1　基频传递率及五组配对差</caption>
-      <thead><tr><th scope="col">频率 (Hz)</th><th scope="col">OFF (%)</th><th scope="col">ON (%)</th>
-        <th scope="col">差值 ± SD (百分点)</th><th scope="col">差值范围 (百分点)</th><th scope="col">钳位更新数</th></tr></thead>
-      <tbody><tr><th scope='row'>1</th><td>8.05</td><td>7.95</td><td>+0.10 ± 0.14</td><td>-0.06 至 +0.33</td><td>0</td></tr><tr><th scope='row'>3</th><td>34.09</td><td>33.45</td><td>+0.64 ± 2.25</td><td>-1.47 至 +3.67</td><td>0</td></tr><tr><th scope='row'>5</th><td>63.03</td><td>62.28</td><td>+0.75 ± 1.01</td><td>-0.21 至 +2.02</td><td>0</td></tr></tbody>
-    </table></div>
-    <figure><img src="img/inertial_feedforward_paired.png" width="2400" height="1035"
-        alt="三个频率的五组 OFF 和 ON 传递率，以线连接每对，并显示配对差、均值和样本标准差。">
-      <figcaption><strong>图 1.</strong> 配对差为正表示基频传递率下降。误差棒为 ±1 个样本标准差，反映组间离散度。</figcaption></figure>
-    <figure><img src="img/inertial_feedforward_waveforms.png" width="2400" height="1305"
-        alt="3 Hz 和 5 Hz 的基座与末端位移波形，以基座拟合相位对齐。">
-      <figcaption><strong>图 2.</strong> 3 Hz 和 5 Hz 分别展示配对差居中的第 3、5 组。位移去除拟合常数项与线性漂移，按基座基频相位对齐。</figcaption></figure>
-    <p>正式扫频中记录到 0 次惯性力矩钳位更新。扫频结束后的独立脉冲触发了肩部旋转关节的钳位计数，输入过期后偏置衰减。</p>
-    <figure><img src="img/inertial_feedforward_diagnostics.png" width="2175" height="1200"
-        alt="诊断脉冲下模型力矩超过限值，逆 PD 力矩目标被钳位，输入过期后位置偏置逐渐衰减。">
-      <figcaption><strong>图 3.</strong> 超量程合成加速度专用于诊断测试。阴影表示模型激活区间，棕色点线为该关节的力矩钳位。</figcaption></figure>
-  </section>
-  <section aria-labelledby="discussion">
-    <h2 id="discussion">讨论</h2>
-    <p>1、3、5 Hz 的配对差分别为 +0.10 ± 0.14、+0.64 ± 2.25 和 +0.75 ± 1.01 个百分点。独立重测（两次开机、六组配对）在 3 Hz 为 +0.13、在 5 Hz 为 +2.96 个百分点。两轮合并共 11 组配对后，5 Hz 为 +1.96 ± 0.70、3 Hz 为 +0.36 ± 0.57、1 Hz 为 −0.04 ± 0.09 个百分点。</p>
-    <p>本轮与那轮都采用固定的 OFF→ON 顺序。随后又用 ABBA 顺序（每区块 OFF ON ON OFF，线性漂移在区块内精确抵消）做了一轮独立重测：1 Hz 为 −0.61 ± 0.16（3 区块）、3 Hz 为 +0.05 ± 0.62（7 区块）、5 Hz 为 +1.01 ± 1.10（6 区块），三个频率均未在 95% 下分辨得出。</p>
-    <p>顺序不是两轮幅度不一致的原因。ABBA 实际抵消掉的漂移在 5 Hz 区块上平均仅 +0.21 个点/段（单块可达 ±4，符号随机），所以固定顺序的估计并无实质偏差；且 ABBA 没有减小散布（5 Hz 区块间标准差 2.68，与之前的配对间标准差相同）。游走来自机械臂自身状态，量级两到三个点，是本台架的测量地板。按方差倒数合并两种设计：1 Hz 为 −0.18 ± 0.08、3 Hz 为 +0.22 ± 0.42、5 Hz 为 +1.69 ± 0.59 个百分点。即这一项在 5 Hz 上值一个点的量级，3 Hz 为零，1 Hz 为小幅倒赔——后者是按基座加速度幅值给该项加门限的理由。</p>
-    <p>ABBA 轮的 68 段中钳位计数全为零，且 34 个 ON 段中 33 个在拟合窗内模型激活率为 100%（唯一例外已被基座幅值筛选剔除）。按 UR5e 的 DH 参数计算，SRDF 的 <code>init</code> 位姿几何雅可比最小奇异值为 0.214、条件数 8.6，是 SRDF 六个具名位姿中最好的，远在 <code>ik_sigma_min</code> 的 0.05 之上，所以抑制率的上限不是位姿条件造成的。</p>
-    <p>解析加速度用于惯性前馈，世界系反馈仍使用 50 Hz p3d 基座状态，半个采样周期在 3 Hz 约为 10.8°。已安装的 p3d 直接读取 Gazebo 连杆速度。3 Hz 时，速度相对同一位移基频求导的中位相位差为 -0.73°。</p>
+    <h2 id="introduction">1　引言<span lang="en">Introduction</span></h2>
+    <p>龙门平移会带动机械臂基座，本文的控制目标是使末端保持在世界坐标系的给定位姿。控制器用位姿反馈纠正实际偏差，并用含末端负载的机械臂动力学模型估算补偿力矩。参考导纳控制中从力到运动的映射<sup>[1]</sup>，模型力矩经关节弹簧–阻尼关系转换为位置前馈。试验分别考察映射方式和基座状态更新频率对末端抗扰的影响。</p>
   </section>
 
-  <section aria-labelledby="mapping-rate-experiments">
-    <h2 id="mapping-rate-experiments">补充实验 · 动态映射与基座反馈频率</h2>
-    <p>在同一次 headless 仿真中，保持世界系目标、PID 增益和关节限幅。20 mm Y 轴扰动在 1、3、5 Hz 各做六个区块。每个区块换序测试四种配置，按同区块配对比较。关闭组仅停止发送解析加速度。静态组把同一钳位后的模型力矩除以关节刚度，动态组经过现有逆 PD。两种映射使用相同的位移偏置上限。设备在试验前到达 SRDF <code>init</code> 附近，固定的是世界系目标。</p>
-    <div class="table-frame"><table>
-      <caption>表 2　50 Hz 下的惯量映射对照</caption>
-      <thead><tr><th scope="col">频率 (Hz)</th><th scope="col">关闭 (%)</th><th scope="col">静态 (%)</th><th scope="col">动态 (%)</th>
-         <th scope="col">关闭 − 静态 (百分点)</th><th scope="col">静态 − 动态 (百分点)</th></tr></thead>
-      <tbody><tr><th scope="row">1</th><td>7.86</td><td>7.93</td>
-        <td>8.00</td><td>-0.07 [-0.22, +0.09]</td><td>-0.08 [-0.26, +0.10]</td></tr><tr><th scope="row">3</th><td>34.09</td><td>33.28</td>
-        <td>33.08</td><td>+0.81 [-0.86, +2.49]</td><td>+0.20 [-1.26, +1.66]</td></tr><tr><th scope="row">5</th><td>62.87</td><td>62.46</td>
-        <td>62.73</td><td>+0.41 [-3.41, +4.23]</td><td>-0.27 [-3.75, +3.20]</td></tr></tbody>
-    </table></div>
-    <figure><img src="img/inertia_mapping_modes.png" width="2520" height="1065"
-        alt="50 Hz 下的三种映射均值，以及区块内两类配对差和 95% 区间。">
-      <figcaption><strong>图 4.</strong> 配对差的点为各区块，菱形和误差棒为均值及 95% 区间。正值表示后一个配置的传递率下降。</figcaption></figure>
-    <p>同一台 Gazebo 同时发布 50 Hz 和 200 Hz 的原生基座状态，使用同一个转发节点切换 PID 收到的状态。末端真值仍以 50 Hz 记录，两组均使用动态映射。这个对照同时改变世界系反馈和使用同一基座状态的运动学前馈的时序。</p>
-    <div class="table-frame"><table>
-      <caption>表 3　动态映射下的基座反馈频率对照</caption>
-      <thead><tr><th scope="col">频率 (Hz)</th><th scope="col">50 Hz (%)</th><th scope="col">200 Hz (%)</th>
-         <th scope="col">配对差 (百分点)</th><th scope="col">末端相对基座相位 (°)</th></tr></thead>
-      <tbody><tr><th scope="row">1</th><td>8.00</td><td>3.58</td>
-        <td>+4.42 [+3.64, +5.20]</td><td>101.9 → 121.7</td></tr><tr><th scope="row">3</th><td>33.08</td><td>15.75</td>
-        <td>+17.33 [+15.09, +19.57]</td><td>84.8 → 98.1</td></tr><tr><th scope="row">5</th><td>62.73</td><td>33.07</td>
-        <td>+29.67 [+24.42, +34.91]</td><td>63.7 → 76.9</td></tr></tbody>
-    </table></div>
-    <figure><img src="img/base_feedback_rate_comparison.png" width="2520" height="1065"
-        alt="20 mm 主对照中两种基座采样率的传递率，以及更宽频率和更大振幅下的单次摸底数据。">
-      <figcaption><strong>图 5.</strong> 左图误差棒为各配置均值的 95% 区间，表 3 给出区块内配对差的 95% 区间。右图各工况仅测一次。</figcaption></figure>
-    <details><summary>展开查看宽频率与振幅摸底</summary>
-      <div class="table-frame"><table>
-        <thead><tr><th scope="col">频率 (Hz)</th><th scope="col">峰值 (mm)</th><th scope="col">50 Hz (%)</th>
-          <th scope="col">200 Hz (%)</th><th scope="col">模型激活率 50 / 200 Hz (%)</th></tr></thead>
-        <tbody><tr><th scope="row">0.5</th><td>10</td><td>3.13</td>
-        <td>0.93</td><td>100 / 100</td></tr><tr><th scope="row">2</th><td>10</td><td>18.13</td>
-        <td>8.62</td><td>100 / 100</td></tr><tr><th scope="row">4</th><td>10</td><td>44.15</td>
-        <td>24.73</td><td>100 / 100</td></tr><tr><th scope="row">6</th><td>10</td><td>74.29</td>
-        <td>41.47</td><td>100 / 100</td></tr><tr><th scope="row">8</th><td>10</td><td>94.54</td>
-        <td>45.17</td><td>92 / 100</td></tr><tr><th scope="row">3</th><td>30</td><td>30.26</td>
-        <td>15.89</td><td>100 / 100</td></tr><tr><th scope="row">5</th><td>30</td><td>60.18</td>
-        <td>32.73</td><td>60 / 51</td></tr></tbody>
-      </table></div>
-    </details>
-    <p>动态映射相对静态映射的三个 95% 配对区间均跨零。5 Hz 下，各段六关节最大惯性偏置的均值从 4.03 mrad 降至 2.50 mrad。200 Hz 相对 50 Hz 的三个配对区间均高于零。主试验没有触发模型力矩钳位，零扰动短窗口的最大末端 Y 峰峰值为 0.027 μm。主试验全程的基座净位移约 56 mm，配对差在同一区块内计算。5 Hz、30 mm 的摸底触发关节限速，模型激活率为 51%–60%。</p>
-    <p>另一次启动使用净位移接近零的扰动和 ABBA 顺序复核发布频率。基座全程净移动 1.23 mm。3 Hz 平均传递率从 33.1% 降至 16.3%，5 Hz 从 62.6% 降至 29.3%。</p>
-    <p>复测可用启动参数 <code>inertia_mapping_experiment:=true</code> 启用开关。停止加速度输入并等待偏置衰减后，向 <code>/sim_cartesian_velocity_controller_sim/use_static_inertia_mapping</code> 发送布尔值，<code>true</code> 选静态换算，<code>false</code> 选动态映射。基座发布频率由 <code>base_pose_update_rate</code> 设置。逐段数据存于 VM 的 <code>/tmp/ur5e-mapping-rate.kzPBo9/trials.csv</code>。</p>
+  <section aria-labelledby="methodology">
+    <h2 id="methodology">2　方法<span lang="en">Methodology</span></h2>
+    <p>外环由世界系位姿误差 <i>e</i> 及其限幅积分 <i>I</i><sub>e</sub> 形成 PID 反馈，并用基座运动形成运动学前馈。令 <i>v</i><sub>e</sub> 为末端世界系速度在控制坐标系中的表示，<i>v</i><sub>b→e</sub> 和 <i>a</i><sub>b→e</sub> 为换算到末端的基座运动信号，则笛卡尔速度指令为</p>
+    <div class="equation">
+      <div class="expression"><math display="block" xmlns="http://www.w3.org/1998/Math/MathML">
+        <msub><mi>v</mi><mtext>cmd</mtext></msub><mo>=</mo>
+        <mo>−</mo><msub><mi>K</mi><mi>p</mi></msub><mi>e</mi>
+        <mo>−</mo><msub><mi>K</mi><mi>i</mi></msub><msub><mi>I</mi><mi>e</mi></msub>
+        <mo>−</mo><msub><mi>K</mi><mi>d</mi></msub><msub><mi>v</mi><mi>e</mi></msub>
+        <mo>−</mo><msub><mi>N</mi><mi>p</mi></msub><msub><mi>v</mi><mrow><mi>b</mi><mo>→</mo><mi>e</mi></mrow></msub>
+        <mo>−</mo><msub><mi>N</mi><mi>d</mi></msub><msub><mi>a</mi><mrow><mi>b</mi><mo>→</mo><mi>e</mi></mrow></msub><mo>.</mo>
+      </math></div><span class="number">(1)</span>
+    </div>
+    <p>速度指令经逆运动学和积分得到关节参考位置 <i>q</i><sub>ref</sub>。关节层另算两部分力矩。<i>G</i> 是重力项，<i>C</i><span aria-label="乘以关节速度">q̇</span> 是科氏与离心项，<i>M</i> 是关节空间惯量矩阵。<i>a</i><sub>b</sub> 表示在基座坐标系中表达的基座线加速度，平移基座的等效重力为 <i>g</i> − <i>a</i><sub>b</sub>。</p>
+    <div class="equation">
+      <div class="expression"><math display="block" xmlns="http://www.w3.org/1998/Math/MathML">
+        <mtable columnalign="right left" columnspacing=".2em" rowspacing=".42em">
+          <mtr>
+            <mtd><msub><mi>τ</mi><mtext>gc</mtext></msub></mtd>
+            <mtd><mo>=</mo><mi>G</mi><mo>(</mo><mi>q</mi><mo>;</mo><mi>g</mi><mo>)</mo>
+              <mo>+</mo><mi>C</mi><mo>(</mo><mi>q</mi><mo>,</mo><mover accent="true"><mi>q</mi><mo>˙</mo></mover><mo>)</mo>
+              <mover accent="true"><mi>q</mi><mo>˙</mo></mover><mo>,</mo></mtd>
+          </mtr>
+          <mtr>
+            <mtd><msub><mi>τ</mi><mtext>in</mtext></msub></mtd>
+            <mtd><mo>=</mo><mi>M</mi><mo>(</mo><mi>q</mi><mo>)</mo>
+              <msub><mover accent="true"><mi>q</mi><mo>¨</mo></mover><mtext>ref</mtext></msub>
+              <mo>+</mo><mi>G</mi><mo>(</mo><mi>q</mi><mo>;</mo><mi>g</mi><mo>−</mo><msub><mi>a</mi><mi>b</mi></msub><mo>)</mo>
+              <mo>−</mo><mi>G</mi><mo>(</mo><mi>q</mi><mo>;</mo><mi>g</mi><mo>)</mo><mo>.</mo></mtd>
+          </mtr>
+        </mtable>
+      </math></div><span class="number">(2)</span>
+    </div>
+    <p>式 (2) 的各项由 KDL 根据 URDF 中的连杆质量、惯量和末端负载计算。基座只平移且末端目标固定时，参考关节加速度由阻尼最小二乘逆 <i>J</i><sup>#</sup><sub>λ</sub> 求得，右侧的零向量对应末端角加速度。</p>
+    <div class="equation">
+      <div class="expression"><math display="block" xmlns="http://www.w3.org/1998/Math/MathML">
+        <msub><mover accent="true"><mi>q</mi><mo>¨</mo></mover><mtext>ref</mtext></msub>
+        <mo>=</mo><msubsup><mi>J</mi><mi>λ</mi><mo>#</mo></msubsup>
+        <mo>(</mo><mo>[</mo><mo>−</mo><msub><mi>a</mi><mi>b</mi></msub><mo>;</mo><mn>0</mn><mo>]</mo>
+        <mo>−</mo><mover accent="true"><mi>J</mi><mo>˙</mo></mover>
+        <mover accent="true"><mi>q</mi><mo>˙</mo></mover><mo>)</mo><mo>.</mo>
+      </math></div><span class="number">(3)</span>
+    </div>
+    <p>将惯性力矩限幅为 <i>τ̃</i><sub>in</sub> 后，用 Gazebo 关节 PD 的比例矩阵 <i>P</i><sub>j</sub> 和微分矩阵 <i>D</i><sub>j</sub> 求位置偏置 <i>δq</i>。式 (4) 的动态映射按控制周期以后向欧拉更新。静态组在惯量支路采用 <i>δq</i> = <i>P</i><sub>j</sub><sup>−1</sup><i>τ̃</i><sub>in</sub>，关闭组令惯量偏置为零。</p>
+    <div class="equation">
+      <div class="expression"><math display="block" xmlns="http://www.w3.org/1998/Math/MathML">
+        <mtable columnalign="right left" columnspacing=".2em" rowspacing=".42em">
+          <mtr>
+            <mtd><msub><mi>D</mi><mi>j</mi></msub><mfrac><mrow><mi>d</mi><mo>(</mo><mi>δ</mi><mi>q</mi><mo>)</mo></mrow><mrow><mi>d</mi><mi>t</mi></mrow></mfrac>
+              <mo>+</mo><msub><mi>P</mi><mi>j</mi></msub><mi>δ</mi><mi>q</mi></mtd>
+            <mtd><mo>=</mo><msub><mover accent="true"><mi>τ</mi><mo>~</mo></mover><mtext>in</mtext></msub><mo>,</mo></mtd>
+          </mtr>
+          <mtr>
+            <mtd><msub><mi>q</mi><mtext>cmd</mtext></msub></mtd>
+            <mtd><mo>=</mo><msub><mi>q</mi><mtext>ref</mtext></msub>
+              <mo>+</mo><msubsup><mi>P</mi><mi>j</mi><mrow><mo>−</mo><mn>1</mn></mrow></msubsup>
+              <msub><mi>τ</mi><mtext>gc</mtext></msub><mo>+</mo><mi>δ</mi><mi>q</mi><mo>.</mo></mtd>
+          </mtr>
+        </mtable>
+      </math></div><span class="number">(4)</span>
+    </div>
+    <p>试验采用 Y 轴底座扰动，固定世界系目标与控制增益。首轮用 20 mm 峰值的正弦扰动，在 1、3、5 Hz 各做六组换序配对。在 50 Hz 底座状态更新率下比较惯量前馈关闭、静态换算和动态映射，再固定动态映射比较 50 与 200 Hz。扰动频率表示底座每秒往复的次数。末端传递率取末端与基座在该频率处的位移幅值比。</p>
+    <p>第二轮固定底座状态更新率为 200 Hz，在同一次启动中比较三种映射。除 3 Hz 和 5 Hz 单频复测外，叠加 0.5–8 Hz 内的 13 个正弦分量，合成指令位移的峰值为 20 mm<sup>[2]</sup>。六组使用不同相位组合，组内三种配置采用相同波形，遍历六种试次顺序。先按时间戳用最小二乘联合拟合各频率分量及线性漂移，再报告逐频传递率和整段去趋势位移的均方根（RMS）之比。</p>
+    <p>PID 调参固定 200 Hz 和动态惯性映射，只更改 Y 向比例与微分增益。先用两套 20 mm 多频波形筛选十组增益，再用独立相位的 20 mm 和 30 mm 波形各做六组配对验证。每次更换增益只重启外环 PID，重新下发同一个世界系目标。每段扰动前记录 2.5 s 的静止末端位置，用去趋势 RMS 检查抖动。</p>
   </section>
-  <footer>数据来自同一次 VM 仿真的 <code>rostopic echo -p</code> 记录。逐组数据保存于 VM 的 <code>/tmp/ur5e-inertia-paired.BPefcd/measurements.csv</code>。
-    <a href="../README.zh-CN.md">仓库配置和复测步骤</a> ·
-    <a href="https://github.com/ros-simulation/gazebo_ros_pkgs/blob/2.9.3/gazebo_plugins/src/gazebo_ros_p3d.cpp#L250-L328">p3d 2.9.3 源码</a>
+
+  <section aria-labelledby="results">
+    <h2 id="results">3　结果<span lang="en">Results</span></h2>
+    <div class="table-frame">
+      <table>
+        <caption>表 1　末端基频传递率（%，六组均值）</caption>
+        <thead><tr><th scope="col">扰动频率</th><th scope="col">关闭／50 Hz</th><th scope="col">静态／50 Hz</th><th scope="col">动态／50 Hz</th><th scope="col">动态／200 Hz</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">1 Hz</th><td>7.86</td><td>7.93</td><td>8.00</td><td>3.58</td></tr>
+          <tr><th scope="row">3 Hz</th><td>34.09</td><td>33.28</td><td>33.08</td><td>15.75</td></tr>
+          <tr><th scope="row">5 Hz</th><td>62.87</td><td>62.46</td><td>62.73</td><td>33.07</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>动态映射相对静态换算的三个末端传递率差值区间均跨零（图 1a）。在 5 Hz 下，六组试次的关节补偿峰值均值从 4.03 降至 2.50 mrad（图 1b）。</p>
+    <figure>
+      <img src="img/inertia_mapping_modes.png" width="2220" height="936" alt="黑白图。左图中惯量映射配对差的 95% 区间均跨零。右图中各组的关节补偿峰值由静态换算到动态映射均下降。">
+      <figcaption><strong>图 1.</strong> 50 Hz 基座状态下的惯量映射对照。(a) 灰点为各组配对差，黑色误差棒为均值的 95% 置信区间。正值表示后一配置的传递率下降。(b) 每条细线连接同组内的两个偏置峰值，峰值取该段六个关节的最大绝对偏置。</figcaption>
+    </figure>
+    <p>基座状态从 50 Hz 提至 200 Hz 后，3 Hz 和 5 Hz 的传递率分别下降 17.33 和 29.67 个百分点（图 2）。独立启动复测中，这两个频点也观察到下降。</p>
+    <figure class="rate">
+      <img src="img/base_feedback_rate_comparison.png" width="1725" height="983" alt="黑白图。200 Hz 基座状态下，1、3、5 Hz 扰动对应的末端传递率均低于 50 Hz 基座状态。">
+      <figcaption><strong>图 2.</strong> 动态映射下两种基座状态更新频率的末端传递率。各点为六组均值，误差棒为各配置均值的 95% 置信区间。</figcaption>
+    </figure>
+    <div class="table-frame">
+      <table>
+        <caption>表 2　200 Hz 基座状态下的惯量映射对照（六组均值）</caption>
+        <thead><tr><th scope="col">扰动工况</th><th scope="col">关闭 (%)</th><th scope="col">静态 (%)</th><th scope="col">动态 (%)</th><th scope="col">关闭 − 动态（百分点）</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">3 Hz 单频</th><td>16.25</td><td>16.07</td><td>16.57</td><td>−0.33 [−1.57, 0.92]</td></tr>
+          <tr><th scope="row">5 Hz 单频</th><td>30.48</td><td>33.52</td><td>31.00</td><td>−0.52 [−3.45, 2.41]</td></tr>
+          <tr><th scope="row">多频（RMS 比值）</th><td>16.23</td><td>16.44</td><td>15.91</td><td>0.32 [−0.90, 1.53]</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>200 Hz 下，动态映射相对关闭的单频差值和多频 RMS 差值的 95% 配对区间均跨零（表 2）。多频时末端 RMS 由 1.18 mm 变为 1.16 mm，动态映射相对静态换算的传递率改善为 0.54 [−0.39, 1.47] 个百分点。5 Hz 单频下，六组记录的关节补偿峰值均下降，均值从 4.34 降至 2.65 mrad。</p>
+    <figure>
+      <img src="img/inertia_mapping_200hz_multisine.png" width="2235" height="960" alt="黑白双栏图。三种配置的平均传递率均随频率上升。动态映射相对关闭的逐点置信区间均跨零。">
+      <figcaption><strong>图 3.</strong> 200 Hz 基座状态下的多频对照。(a) 同一扰动同时包含 13 个频率分量，连线连接测量值。(b) 六组配对差与逐频 95% 置信区间，正值表示动态映射的传递率较低。8 Hz 处相对静态换算的区间为 0.64 至 5.35 个百分点，属于逐频探索结果。</figcaption>
+    </figure>
+    <div class="table-frame">
+      <table>
+        <caption>表 3　Y 向 PID 增益调整后的独立验证（200 Hz，六组均值）</caption>
+        <thead><tr><th scope="col">指令峰值</th><th scope="col">末端 RMS (mm)</th><th scope="col">RMS 传递率 (%)</th><th scope="col">最差频点传递率 (%)</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">20 mm</th><td>1.24 → 0.85</td><td>14.93 → 10.17</td><td>46.52 → 36.60</td></tr>
+          <tr><th scope="row">30 mm</th><td>1.86 → 1.28</td><td>14.82 → 10.15</td><td>46.01 → 36.24</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>筛选后采用的 Y 向增益为 <i>K</i><sub>p</sub> = 12.0、<i>K</i><sub>d</sub> = 0.35，原值为 7.7 和 0.10。两种振幅下的 13 个频率成分的平均传递率均下降。20 mm 与 30 mm 的配对 RMS 传递率分别改善 4.76 [2.99, 6.53] 和 4.66 [2.93, 6.39] 个百分点，区间为 95%（图 4）。两组静止抖动均低于 0.00002 mm RMS，复测中的关节限速告警和惯量力矩钳位计数均为零。</p>
+    <figure>
+      <img src="img/pid_y_gain_tuning.png" width="2235" height="960" alt="左图是 20 mm 多频扰动下的传递率，调后均值在 13 个采样频点均较低。右图是 20 和 30 mm 工况的 RMS 与最差频点配对改善，四个置信区间均在零以上。">
+      <figcaption><strong>图 4.</strong> 200 Hz 下的 Y 向 PID 复测。(a) 20 mm 多频扰动的逐频传递率均值。(b) 两种振幅的配对改善量，灰点为各组差值，误差棒为 95% 置信区间。</figcaption>
+    </figure>
+  </section>
+
+  <section aria-labelledby="discussion">
+    <h2 id="discussion">4　讨论<span lang="en">Discussion</span></h2>
+    <p>世界系反馈负责纠正位姿误差，动力学模型在关节层提供前馈补偿。导纳式动态映射的可重复收益是降低关节补偿峰值。200 Hz 对照尚未证实它相对关闭惯量前馈能进一步降低末端误差。当前可重复的主要抗扰收益来自加快底座状态更新，该信号同时进入位姿反馈和运动学前馈。</p>
+    <p>在动力学前馈保持固定时，Y 向反馈调参进一步将两种振幅下的末端 RMS 降低约 31%。本次验证适用于 Gazebo 的 SRDF 初始姿态、Y 向平移和世界系定点任务。固定振幅时，补偿所需的速度随扰动频率增长，加速度随频率平方增长，关节限速会约束高频、大振幅工况。</p>
+    <details>
+      <summary>补充试验数据与复测设置</summary>
+      <p>提频的配对改善量在 1、3、5 Hz 分别为 4.42 [3.64, 5.20]、17.33 [15.09, 19.57]、29.67 [24.42, 34.91] 个百分点，方括号是 95% 区间。主试验全程基座净移动约 56 mm。近零净位移的独立复测中，3 Hz 为 33.1% → 16.3%，5 Hz 为 62.6% → 29.3%，基座净移动 1.23 mm。</p>
+      <p>10 mm 的单次摸底覆盖 0.5、2、4、6、8 Hz，其中 8 Hz 提频前后的传递率为 94.54% 和 45.17%。30 mm、5 Hz 下分别为 60.18% 和 32.73%。</p>
+      <p>逐段记录位于 VM 的 <code>/tmp/ur5e-mapping-rate.kzPBo9/trials.csv</code>。复测时用 <code>base_pose_update_rate:=200.0</code> 调整基座频率，用 <code>inertia_mapping_experiment:=true</code> 启用映射切换。较早试验见<a href="../README.zh-CN.md">仓库记录</a>和<a href="img/inertial_feedforward_paired.png">惯量前馈配对图</a>。</p>
+      <p>200 Hz 映射对照的<a href="experiments/inertia_mapping_200hz/trials.csv">逐段统计</a>和<a href="experiments/inertia_mapping_200hz/responses.csv">逐频拟合结果</a>保存在仓库内，原始话题位于 VM 的 <code>/tmp/ur5e-inertia-200hz.xm0npn/results</code>。复试映射对照时，用 <code>UR5E_BENCH_PID_PARAMS</code> 指定调参前的 YAML（Y 向增益 7.7 和 0.10），再执行 <code>bash run.sh 新输出目录</code>。绘图用 <code>python3 analyze.py 数据目录 图像路径</code>。</p>
+      <p>200 Hz 试验中，开启组在拟合窗口内的惯量前馈有效比例为 99.6% 至 100%，力矩钳位计数为零。5 Hz 单频的两段记录了关节限速告警，其中一段告警出现在拟合窗口内。全试验基座净移动 6.60 mm。</p>
+      <p>PID 调参的<a href="experiments/inertia_mapping_200hz/pid-gain-trials.csv">逐段统计</a>和<a href="experiments/inertia_mapping_200hz/pid-gain-responses.csv">逐频结果</a>包含筛选与独立验证。<code>bash run.sh 新输出目录 --tune</code> 可复试，绘图用 <code>python3 analyze_pid.py 数据目录 图像路径</code>。原始话题位于 VM 的 <code>/tmp/ur5e-pid-tuning.ptyNtZ/tuning</code>。</p>
+      <p>默认 50 Hz 采样率下，20 mm 多频扰动另做了四组配对复测。RMS 传递率由 31.42% 降至 24.81%，配对改善 6.61 [2.95, 10.27] 个百分点。最差频点的配对改善区间为 −5.55 至 25.83 个百分点。<a href="experiments/inertia_mapping_200hz/pid-gain-50hz-trials.csv">50 Hz 试次</a>及<a href="experiments/inertia_mapping_200hz/pid-gain-50hz-responses.csv">逐频结果</a>使用 <code>UR5E_BENCH_BASE_RATE=50.0 bash run.sh 新输出目录 --validate-gains 12.0 0.35</code> 复试。</p>
+    </details>
+  </section>
+
+  <footer class="reference">
+    <p>[1] Keemink A. Q. L., van der Kooij H., Stienen A. H. A. <a href="https://doi.org/10.1177/0278364918768950">Admittance control for physical human–robot interaction</a>. <i>The International Journal of Robotics Research</i>, 2018, 37(11).</p>
+    <p>[2] Pintelon R., Schoukens M., Lataire J. <a href="https://arxiv.org/abs/2004.02579">Best Linear Approximation of Nonlinear Continuous-Time Systems Subject to Process Noise and Operating in Feedback</a>, 2020.</p>
+    <p>实现对照见<a href="../sim_control/sim_pid_control/src/PIDController.cpp">笛卡尔反馈控制器</a>和<a href="../sim_control/sim_cartesian_velocity_control/src/cartesian_velocity_controller.cpp">关节位置前馈实现</a>。</p>
   </footer>
-</main>
+</article>
 </body>
 </html>

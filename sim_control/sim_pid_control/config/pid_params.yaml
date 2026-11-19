@@ -14,8 +14,9 @@
 # so K_d was multiplying a constant pose-dependent artefact: it contributed no
 # damping at all and about 0.09 mm of fixed steady-state error instead. If you
 # retune K_d, note that it is doing something now that it was not doing before.
+# Y gains were selected with 200 Hz base state updates and checked at 50 Hz.
 K_p: [17.70,0,0,0,0,0,
-      0,7.70,0,0,0,0,
+      0,12.00,0,0,0,0,
       0,0,7.70,0,0,0,
       0,0,0,7.70,0,0,
       0,0,0,0,7.70,0,
@@ -27,7 +28,7 @@ K_i: [0.0001,0,0,0,0,0,
       0,0,0,0,0.0001,0,
       0,0,0,0,0,0.0001]
 K_d: [0.1,0,0,0,0,0,
-      0,0.1,0,0,0,0,
+      0,0.35,0,0,0,0,
       0,0,0.1,0,0,0,
       0,0,0,0.1,0,0,
       0,0,0,0,0.1,0,

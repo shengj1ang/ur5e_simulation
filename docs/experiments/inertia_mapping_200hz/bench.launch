@@ -1,0 +1,22 @@
+<launch>
+  <arg name="base_pose_update_rate" default="200.0"/>
+  <arg name="pid_params_file" default="$(find sim_pid_control)/config/pid_params.yaml"/>
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(find sim_gazebo)/world/one_brick.world"/>
+    <arg name="gui" value="false"/>
+    <arg name="headless" value="true"/>
+    <arg name="use_sim_time" value="true"/>
+  </include>
+  <param name="robot_description" command="$(find xacro)/xacro '$(find sim_description)/urdf/xacro/main.xacro' base_pose_update_rate:=$(arg base_pose_update_rate)"/>
+  <param name="mapping_bench_base_rate" type="double" value="$(arg base_pose_update_rate)"/>
+  <rosparam file="$(find sim_bringup)/config/gazebo_joint_pid_gains.yaml" command="load"/>
+  <rosparam file="$(find sim_bringup)/config/gantry_velocity_controller.yaml" command="load"/>
+  <node pkg="gazebo_ros" type="spawn_model" name="urdf_spawner"
+        args="-urdf -model sim -param robot_description -x -1.3 -y 0 -z 0"/>
+  <include file="$(find sim_moveit_config)/launch/sim_gazebo_states.launch"/>
+  <include file="$(find sim_moveit_config)/launch/sim_trajectory_controller.launch"/>
+  <include file="$(find sim_pid_control)/launch/pid_controller.launch">
+    <arg name="inertia_mapping_experiment" value="true"/>
+    <arg name="PID_PARAMS_FILE" value="$(arg pid_params_file)"/>
+  </include>
+</launch>
