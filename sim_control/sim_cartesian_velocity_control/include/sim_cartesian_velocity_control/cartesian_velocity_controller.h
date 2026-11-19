@@ -71,6 +71,11 @@ protected:
 
   KDL::Twist x_dt_des_;      // Desired end-effector velocity
   KDL::JntArray q_dt_cmd_;      // Desired joint velocity
+  // Commanded joint position, integrated from q_dt_cmd_ by the simulated
+  // instantiation below. It is deliberately a state of the controller and not
+  // re-read from the joint handles every cycle - see the comment on
+  // CartesianVelocityControllerSim::writeVelocityCommands.
+  KDL::JntArray q_cmd_;
 
   boost::shared_ptr<KDL::ChainIkSolverVel> ik_vel_solver_;
 

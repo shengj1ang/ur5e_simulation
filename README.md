@@ -355,10 +355,37 @@ The same problem solved with k-means instead.
   subscribes to it for the mobile base of the robot it was originally written for.
   This model has a fixed gantry instead, so the base pose it uses stays at zero.
 
-* **`init_pose_start_controllers.launch` takes the arm away from MoveIt.** That is
-  what it is for — it switches from `arm_joint_controller` to the Cartesian
-  velocity controller — but MoveIt execution stops working until you switch back
+* **`init_pose_start_controllers.launch` does not actually set the pose.** It
+  calls `/gazebo/set_model_configuration`, the service reports `success: True`,
+  and the arm does not move. `arm_joint_controller` is still running at that
+  moment and holds a position setpoint of its own, so the first physics step
+  after `unpause_physics` writes that setpoint and snaps the arm back. Measured:
+  arm at the SRDF `init` pose, `initial_pose.yaml` asking for
+  `elbow_joint: 0.0`, arm still at `elbow_joint 1.5700` afterwards. Only the
+  controller switch in that script has an effect. To place the arm, send a
+  trajectory to `arm_joint_controller` and switch afterwards (docs/WORKFLOW.md
+  §5), or stop the trajectory controller before the teleport.
+
+  It also takes the arm away from MoveIt, which is what it is for — it switches
+  from `arm_joint_controller` to the Cartesian velocity controller — but MoveIt
+  execution stops working until you switch back
   (`controller_manager start arm_joint_controller`).
+
+* **The Cartesian IK is undamped and the default startup pose is singular.**
+  `cartesian_velocity_controller` solves with `KDL::ChainIkSolverVel_pinv_givens`,
+  a plain pseudo-inverse with no damping. The spawner in
+  `with_moveit_new.launch` passes `-J` 0 for all six arm joints, and
+  `initial_pose.yaml` also asks for `elbow_joint: 0.0`; both are the fully
+  extended arm, which is the elbow singularity, where that pseudo-inverse is
+  ill-conditioned. Commanding 0.02 m/s along x from there produced joint
+  velocities big enough to fling the unactuated gantry (`y_joint` 0.77 m and
+  `r_joint` 25 rad within two seconds) and `ee_state` twists of 16 m/s, while
+  the end effector itself barely moved. From a well-conditioned pose — the SRDF
+  `init` state, `elbow_joint` 1.57 — the same commands track to 100.0 % with no
+  measurable cross-axis error. So place the arm away from full extension before
+  handing over to these controllers, and expect to want a damped solver
+  (`ChainIkSolverVel_wdls`) or a cap on the joint velocity norm before it is
+  safe to drive near a singularity.
 
 * **Parallel builds used to fail** with
   `mission_mode/mode_switch.h: No such file or directory`. The four executables in

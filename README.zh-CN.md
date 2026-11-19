@@ -336,9 +336,29 @@ roslaunch sim_admittance_control admittance_controller.launch
   是因为它原本写给一台带移动底盘的机器人。本模型是固定龙门，所以它用到的底盘位姿
   一直保持为零。
 
-* **`init_pose_start_controllers.launch` 会把臂从 MoveIt 手里拿走。** 这正是它的用途
-  ——从 `arm_joint_controller` 切到笛卡尔速度控制器——但在你切回去之前
-  （`controller_manager start arm_joint_controller`），MoveIt 的执行功能是不可用的。
+* **`init_pose_start_controllers.launch` 其实没有把位姿设上去。** 它调
+  `/gazebo/set_model_configuration`，服务返回 `success: True`，而机械臂并没有动。
+  调用的那一刻 `arm_joint_controller` 还在运行，它持有自己的位置设定点，于是
+  `unpause_physics` 之后的第一个物理步就把那个设定点写下去，把机械臂弹回原处。实测：
+  机械臂停在 SRDF 的 `init` 位姿，`initial_pose.yaml` 要求 `elbow_joint: 0.0`，跑完之后
+  机械臂仍然在 `elbow_joint 1.5700`。这个脚本里真正生效的只有控制器切换那一步。要摆位，
+  先给 `arm_joint_controller` 发一条轨迹再切（见 docs/WORKFLOW.md §5），或者在传送之前
+  先把轨迹控制器停掉。
+
+  它同时会把臂从 MoveIt 手里拿走——这正是它的用途，从 `arm_joint_controller` 切到笛卡尔
+  速度控制器——但在你切回去之前（`controller_manager start arm_joint_controller`），
+  MoveIt 的执行功能是不可用的。
+
+* **笛卡尔 IK 没有阻尼，而默认启动位姿恰好是奇异的。**
+  `cartesian_velocity_controller` 用的是 `KDL::ChainIkSolverVel_pinv_givens`，一个不带
+  阻尼的纯伪逆。`with_moveit_new.launch` 里的 spawner 给六个臂关节都传了 `-J` 0，
+  `initial_pose.yaml` 要的也是 `elbow_joint: 0.0`；两者都是机械臂完全伸直，也就是肘部
+  奇异位形，伪逆在那里是病态的。从那个位形上给 x 方向 0.02 m/s，解出的关节速度大到
+  足以把没有控制器的龙门甩出去（两秒内 `y_joint` 0.77 m、`r_joint` 25 rad），
+  `ee_state` 报出 16 m/s 的速度，而末端本身几乎没动。换到一个条件良好的位姿——SRDF 的
+  `init` 状态，`elbow_joint` 1.57——同样的指令跟踪率 100.0%，跨轴误差测不出来。所以在
+  交给这些控制器之前要把机械臂摆离完全伸直的位形；要想在奇异点附近也能安全驱动，
+  大概需要换成带阻尼的解算器（`ChainIkSolverVel_wdls`）或者给关节速度范数加上限。
 
 * **并行编译以前会失败**，报
   `mission_mode/mode_switch.h: No such file or directory`。现在
