@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
 """Drive one gantry axis sinusoidally, to disturb the arm's base on purpose.
 
-The arm is mounted on the gantry, so moving the gantry moves the arm's base
-while the arm is holding its end effector somewhere. That is the disturbance
-sim_pid_control's N_p and N_d terms feed forward against, and the one the
-operational-space inertia in sim_cartesian_dynamics_controller describes the
-cost of: to leave the end effector where it is, the arm has to accelerate its
-own inertia against the base motion.
-
-Note what the controllers do and do not see. ee_state reports the end-effector
-pose in base_link, so the feedback loop is blind to the base moving - the arm
-can hold a perfect base_link pose while the end effector swings through the
-room. The quantity to measure is therefore the end effector in world, which
-/ee_pose_ground_truth publishes.
+The arm is mounted on the gantry. Measure its end effector in world with
+/ee_pose_ground_truth while the gantry moves. For a translating base, publish
+the derivative of the velocity command on /gantry/base_linear_acceleration
+for the arm's inertial feedforward. This is the commanded acceleration.
 
 The velocity is ramped in and out over `ramp` seconds with a raised cosine, so
 that the run does not start with a step in base acceleration that tells you
@@ -31,7 +23,10 @@ On exit it commands zero on all four axes.
 
 import math
 import rospy
+from geometry_msgs.msg import Vector3Stamped
+from nav_msgs.msg import Odometry
 from std_msgs.msg import Float64MultiArray
+from tf.transformations import quaternion_matrix
 
 AXES = ['x', 'y', 'z', 'r']
 
@@ -49,14 +44,32 @@ def main():
     if axis not in AXES:
         rospy.logerr("axis must be one of %s, got '%s'", AXES, axis)
         return
-    if frequency <= 0.0:
-        rospy.logerr('frequency must be positive, got %f', frequency)
+    if not all(math.isfinite(value) for value in (amplitude, frequency, duration, ramp, rate_hz)):
+        rospy.logerr('amplitude, frequency, duration, ramp and rate must be finite')
+        return
+    if frequency <= 0.0 or rate_hz <= 0.0:
+        rospy.logerr('frequency and rate must be positive, got %f and %f', frequency, rate_hz)
         return
     index = AXES.index(axis)
 
     pub = rospy.Publisher('/gantry_velocity_controller/command',
                           Float64MultiArray, queue_size=1)
+    acceleration_pub = rospy.Publisher('/gantry/base_linear_acceleration',
+                                       Vector3Stamped, queue_size=1)
     rate = rospy.Rate(rate_hz)
+    base_orientation = None
+
+    def read_base_orientation(msg):
+        nonlocal base_orientation
+        if msg.header.frame_id.lstrip('/') != 'world':
+            return
+        orientation = msg.pose.pose.orientation
+        q = [orientation.x, orientation.y, orientation.z, orientation.w]
+        if all(math.isfinite(value) for value in q) and sum(value * value for value in q) > 0.0:
+            base_orientation = (msg.header.stamp, quaternion_matrix(q)[:3, :3].T)
+
+    if axis != 'r':
+        rospy.Subscriber('/base_pose_ground_truth', Odometry, read_base_orientation, queue_size=1)
 
     omega = 2.0 * math.pi * frequency
     peak_velocity = amplitude * omega
@@ -74,32 +87,51 @@ def main():
         rate.sleep()
     start = rospy.Time.now()
 
-    def send(velocity):
+    def send(stamp, velocity, acceleration):
         msg = Float64MultiArray()
         msg.data = [0.0] * len(AXES)
         msg.data[index] = velocity
         pub.publish(msg)
 
+        orientation = base_orientation
+        if orientation is None:
+            return
+        orientation_stamp, world_to_base = orientation
+        if not 0.0 <= (stamp - orientation_stamp).to_sec() <= 0.12:
+            return
+        acceleration_msg = Vector3Stamped()
+        acceleration_msg.header.stamp = stamp
+        acceleration_msg.header.frame_id = 'base_link'
+        acceleration_msg.vector.x, acceleration_msg.vector.y, acceleration_msg.vector.z = (
+            acceleration * world_to_base[:, index])
+        acceleration_pub.publish(acceleration_msg)
+
     while not rospy.is_shutdown():
-        t = (rospy.Time.now() - start).to_sec()
+        stamp = rospy.Time.now()
+        t = (stamp - start).to_sec()
         if duration > 0.0 and t > duration + ramp:
             break
 
         # Raised cosine in, and out again over the last `ramp` seconds.
         envelope = 1.0
+        envelope_rate = 0.0
         if ramp > 0.0:
             if t < ramp:
                 envelope = 0.5 * (1.0 - math.cos(math.pi * t / ramp))
+                envelope_rate = 0.5 * math.pi / ramp * math.sin(math.pi * t / ramp)
             elif duration > 0.0 and t > duration:
-                left = (duration + ramp - t) / ramp
-                envelope = 0.5 * (1.0 - math.cos(math.pi * max(left, 0.0)))
+                angle = math.pi * (duration + ramp - t) / ramp
+                envelope = 0.5 * (1.0 - math.cos(angle))
+                envelope_rate = -0.5 * math.pi / ramp * math.sin(angle)
 
-        send(envelope * peak_velocity * math.cos(omega * t))
+        velocity = peak_velocity * math.cos(omega * t)
+        acceleration = -peak_acceleration * math.sin(omega * t)
+        send(stamp, envelope * velocity, envelope * acceleration + envelope_rate * velocity)
         rate.sleep()
 
     # Leave the axis stopped, and say so loudly enough to be seen in a log.
     for _ in range(10):
-        send(0.0)
+        send(rospy.Time.now(), 0.0, 0.0)
         rospy.sleep(0.01)
     rospy.loginfo('gantry_disturbance: stopped')
 

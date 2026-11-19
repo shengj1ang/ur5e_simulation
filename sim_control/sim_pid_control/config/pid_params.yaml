@@ -122,11 +122,10 @@ integral_limit: 0.05
 # it worse. Two reasons, both of which a different admittance will not fix:
 #
 # a_ff is the base acceleration carried to the end effector, which this node
-# gets by differencing a base twist that the p3d plugin already got by
-# differencing a pose. Multiplying that second derivative by Lambda, 5 to 9 kg,
-# puts the noise into the velocity command: with no disturbance at all, the
-# end effector's jitter in world went from 0.006 mm peak-to-peak to 6.850 mm
-# when the term was switched on.
+# gets by backward-differencing p3d's 50 Hz base twist. Multiplying that
+# estimate by Lambda, 5 to 9 kg, puts the noise into the velocity command.
+# With no disturbance, switching on that term raised the world-frame
+# end-effector jitter from 0.006 mm to 6.850 mm peak-to-peak.
 #
 # And the shape is wrong even without the noise. The command is a velocity and
 # the Cartesian controller integrates it into a position, so a wrench admitted

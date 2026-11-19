@@ -4,6 +4,7 @@
 #include "sim_cartesian_velocity_control/distal_inertia.h"
 #include "kdl_conversions/kdl_msg.h"
 #include <urdf/model.h>
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -87,7 +88,8 @@ template<typename T>
 bool CartesianVelocityControllerBase<T>::init(T *robot, ros::NodeHandle &n) 
 {
   // KDL
-  KinematicChainControllerBase<T>::init(robot, n);
+  if (!KinematicChainControllerBase<T>::init(robot, n))
+    return false;
 
   n.param("ik_sigma_min", ik_sigma_min_, 0.05);
   n.param("ik_lambda", ik_lambda_, 0.2);
@@ -254,10 +256,8 @@ void CartesianVelocityControllerBase<T>::setupFeedforward(ros::NodeHandle &n)
  * The dynamics say what that torque is: M qddot + C qdot + G. So adding
  * (G + C qdot)/p to the position command cancels the part of the deflection
  * that gravity and the arm's own motion cause, and the joint lands on the
- * reference instead of below it. The inertial term is left out: it needs the
- * desired joint acceleration, which here would have to be differenced from a
- * command that arrives at 250 Hz into a 1 kHz loop, and that is a train of
- * spikes rather than an acceleration.
+ * reference instead of below it. The simulation controller handles inertia
+ * separately when a stamped base acceleration is available.
  *
  * The sign and the size were checked against measurements taken before this
  * existed. At the SRDF 'init' pose the model gives G of -18.848 Nm at
@@ -347,9 +347,10 @@ void CartesianVelocityControllerBase<T>::update(const ros::Time& time, const ros
                             "end effector will not follow the command exactly");
   }
 
-  limitJointVelocities();
+  const bool velocity_limited = limitJointVelocities();
+  reference_unconstrained_ = ik_ret == 0 && !velocity_limited;
   computeFeedforwardOffset();
-  writeVelocityCommands(period);
+  writeVelocityCommands(time, period);
 
   // Forward kinematics
   fk_vel_solver_->JntToCart(this->joint_msr_, x_dot_);
@@ -382,10 +383,10 @@ void CartesianVelocityControllerBase<T>::update(const ros::Time& time, const ros
  * clamping single joints instead would send it somewhere else entirely.
  */
 template<typename T>
-void CartesianVelocityControllerBase<T>::limitJointVelocities()
+bool CartesianVelocityControllerBase<T>::limitJointVelocities()
 {
   if (max_joint_velocity_ <= 0.0)   // disabled
-    return;
+    return false;
 
   double norm = 0.0;
   for (unsigned int i = 0; i < q_dt_cmd_.rows(); i++)
@@ -400,7 +401,9 @@ void CartesianVelocityControllerBase<T>::limitJointVelocities()
     ROS_WARN_THROTTLE(5.0, "Cartesian velocity controller: joint velocity "
                            "%.3f rad/s over the %.3f rad/s cap, scaled by %.3f",
                       norm, max_joint_velocity_, scale);
+    return true;
   }
+  return false;
 }
 
 /*!
@@ -426,12 +429,124 @@ void CartesianVelocityControllerBase<T>::command_cart_vel(const geometry_msgs::T
  * for a VelocityJointInterface
  * \param period The duration of an update cycle
  */
-void CartesianVelocityController::writeVelocityCommands(const ros::Duration& period) 
+void CartesianVelocityController::writeVelocityCommands(const ros::Time&, const ros::Duration&)
 {
     for(std::size_t i=0; i < this->joint_handles_.size(); i++) 
     {
       this->joint_handles_[i].setCommand(q_dt_cmd_(i));
     }
+}
+
+bool CartesianVelocityControllerSim::init(hardware_interface::PositionJointInterface* robot,
+                                         ros::NodeHandle& n)
+{
+  if (!CartesianVelocityControllerBase::init(robot, n))
+    return false;
+
+  bool enable_inertia;
+  n.param("inertia_feedforward", enable_inertia, false);
+  if (!enable_inertia)
+    return true;
+
+  std::string topic;
+  n.param<std::string>("base_acceleration_topic", topic, "/gantry/base_linear_acceleration");
+  if (topic.empty())
+  {
+    ROS_WARN("Inertia feedforward requires a base_acceleration_topic");
+    return true;
+  }
+
+  // Match the actual Gazebo servo, even when the static compensation uses
+  // a separate stiffness setting. The inverse below is for PD with zero I.
+  for (const auto& joint : joint_handles_)
+  {
+    const std::string gains = "/gazebo_ros_control/pid_gains/" + joint.getName();
+    double p = 0.0, d = 0.0, i = 0.0;
+    ros::param::get(gains + "/p", p);
+    ros::param::get(gains + "/d", d);
+    ros::param::get(gains + "/i", i);
+    if (!std::isfinite(p) || p <= 0.0 || !std::isfinite(d) || d < 0.0 || i != 0.0)
+    {
+      ROS_WARN("Inertia feedforward requires Gazebo PD gains with zero I for %s",
+               joint.getName().c_str());
+      return true;
+    }
+    joint_proportional_gain_.push_back(p);
+    joint_damping_.push_back(d);
+  }
+
+  const unsigned int joints = kdl_chain_.getNrOfJoints();
+  inertial_offset_.resize(joints);
+  reference_acceleration_.resize(joints);
+  translation_torque_.resize(joints);
+  inertial_torque_.resize(joints);
+  arm_inertia_.resize(joints);
+  jacobian_dot_.reset(new KDL::ChainJntToJacDotSolver(kdl_chain_));
+  for (unsigned int axis = 0; axis < unit_acceleration_models_.size(); ++axis)
+  {
+    KDL::Vector apparent_gravity = KDL::Vector::Zero();
+    apparent_gravity(axis) = -1.0;
+    unit_acceleration_models_[axis].reset(new KDL::ChainDynParam(dyn_chain_, apparent_gravity));
+  }
+
+  n.getParam("root_name", root_name_);
+  base_acceleration_subscriber_ = n.subscribe(
+      topic, 1, &CartesianVelocityControllerSim::baseAccelerationCallback,
+      this, ros::TransportHints().tcpNoDelay());
+  inertia_feedforward_enabled_ = true;
+  ROS_INFO("Cartesian velocity controller: translational inertia feedforward listens on %s", topic.c_str());
+  return true;
+}
+
+void CartesianVelocityControllerSim::starting(const ros::Time& time)
+{
+  CartesianVelocityControllerBase::starting(time);
+  started_at_ = time;
+  if (inertia_feedforward_enabled_)
+    KDL::SetToZero(inertial_offset_);
+}
+
+void CartesianVelocityControllerSim::baseAccelerationCallback(const geometry_msgs::Vector3StampedConstPtr& msg)
+{
+  const auto& a = msg->vector;
+  if (msg->header.frame_id != root_name_ || msg->header.stamp.isZero() ||
+      !std::isfinite(a.x) || !std::isfinite(a.y) || !std::isfinite(a.z))
+    return;
+
+  BaseAcceleration sample;
+  sample.stamp = msg->header.stamp;
+  sample.linear = KDL::Vector(a.x, a.y, a.z);
+  base_acceleration_.writeFromNonRT(sample);
+}
+
+bool CartesianVelocityControllerSim::computeInertialTorque(const ros::Time& time)
+{
+  const auto& sample = *base_acceleration_.readFromRT();
+  if (sample.stamp.isZero() || sample.stamp < started_at_ || sample.stamp > time ||
+      (time - sample.stamp).toSec() > 0.05 || !reference_unconstrained_)
+    return false;
+
+  // For a world-fixed tip and a translating root, J*qdd + Jdot*qdot = -a_base.
+  const KDL::Twist task_acceleration(-sample.linear, KDL::Vector::Zero());
+  KDL::Twist jacobian_bias;
+  if (jacobian_dot_->JntToJacDot(joint_msr_, jacobian_bias) != 0 ||
+      ik_vel_solver_->CartToJnt(joint_msr_.q, task_acceleration - jacobian_bias,
+                              reference_acceleration_) != 0 ||
+      dyn_param_->JntToMass(joint_msr_.q, arm_inertia_) != 0)
+    return false;
+
+  inertial_torque_.data.noalias() = arm_inertia_.data * reference_acceleration_.data;
+  // In a translating root, the same uniform inertial load as -a_base acts
+  // on every link. KDL gravity torques are linear in that acceleration.
+  for (unsigned int axis = 0; axis < unit_acceleration_models_.size(); ++axis)
+  {
+    if (sample.linear(axis) == 0.0)
+      continue;
+    if (unit_acceleration_models_[axis]->JntToGravity(joint_msr_.q, translation_torque_) != 0)
+      return false;
+    inertial_torque_.data += sample.linear(axis) * translation_torque_.data;
+  }
+  return inertial_torque_.data.allFinite();
 }
 
 /** \brief write the desired velocity command in the hardware interface input
@@ -475,11 +590,15 @@ void CartesianVelocityController::writeVelocityCommands(const ros::Duration& per
  * sim_bringup/config/gazebo_joint_pid_gains.yaml the joint is a real servo with
  * a torque limit, and it can fall behind.
  */
-void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Duration& period)
+void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time, const ros::Duration& period)
 {
+  const double dt = period.toSec();
+  const bool compensate_inertia = inertia_feedforward_enabled_ && dt > 0.0 &&
+                                 computeInertialTorque(time);
   for(std::size_t i=0; i < this->joint_handles_.size(); i++)
   {
-    q_cmd_(i) += q_dt_cmd_(i)*period.toSec();
+    q_cmd_(i) += q_dt_cmd_(i)*dt;
+    bool lead_limited = false;
 
     if (max_command_lead_ > 0.0)
     {
@@ -487,6 +606,7 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Duration& 
       if (q_cmd_(i) > measured + max_command_lead_)
       {
         q_cmd_(i) = measured + max_command_lead_;
+        lead_limited = true;
         ROS_WARN_THROTTLE(5.0, "Cartesian velocity controller: %s cannot follow, "
                                "holding the command %.4f rad ahead of it",
                           this->joint_handles_[i].getName().c_str(),
@@ -495,6 +615,7 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Duration& 
       else if (q_cmd_(i) < measured - max_command_lead_)
       {
         q_cmd_(i) = measured - max_command_lead_;
+        lead_limited = true;
         ROS_WARN_THROTTLE(5.0, "Cartesian velocity controller: %s cannot follow, "
                                "holding the command %.4f rad behind it",
                           this->joint_handles_[i].getName().c_str(),
@@ -507,7 +628,24 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Duration& 
     // lead it takes to get there. Keeping them apart is also what lets the
     // anti-windup above compare the reference with the measurement, which is
     // the comparison that means something.
-    this->joint_handles_[i].setCommand(q_cmd_(i) + this->dq_ff_(i));
+    double command = q_cmd_(i) + dq_ff_(i);
+    if (inertia_feedforward_enabled_)
+    {
+      const double p = joint_proportional_gain_[i];
+      const double d = joint_damping_[i];
+      // A bounded torque also bounds the inverse PD's position offset to 25 mrad.
+      const double torque_limit = p * 0.025;
+      const double torque = compensate_inertia && !lead_limited
+          ? std::max(-torque_limit, std::min(torque_limit, inertial_torque_(i)))
+          : 0.0;
+      double& offset = inertial_offset_(i);
+      // Backward Euler inverse of P + D*s. Let it decay with zero added
+      // torque when the input expires; dropping a nonzero offset would kick D.
+      if (dt > 0.0)
+        offset += dt * (torque - p * offset) / (d + p * dt);
+      command += offset;
+    }
+    this->joint_handles_[i].setCommand(command);
   }
 }
 

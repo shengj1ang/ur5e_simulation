@@ -400,10 +400,10 @@ feedback helps instead of fighting.
 **The model inertia term, as written, makes it worse**, and the reason is worth
 being precise about rather than tuning around:
 
-* Its input is `a_ff`, the base acceleration carried to the end effector, which
-  the node forms by differencing a base twist that the p3d plugin already
-  obtained by differencing a pose. Multiplying that second derivative by Λ, 5 to
-  9 kg, puts the noise straight into a velocity command. With no disturbance at
+* The node estimates `a_ff`, the base acceleration carried to the end effector,
+  by backward-differencing the 50 Hz base twist published by p3d. Multiplying
+  the estimate by Λ, 5 to 9 kg, puts the difference noise into the velocity
+  command. With no disturbance at
   all, end-effector jitter in world went from 0.006 mm peak-to-peak to
   **6.850 mm** when the term was switched on.
 * Even without the noise the shape is wrong. The arm is commanded in velocity
@@ -503,11 +503,33 @@ Where it earns its place is one loop in: the Cartesian controller on its own,
 which is also what `sim_admittance_control` and anything commanding twists
 directly are using.
 
-The inertial term is deliberately absent. It needs the desired joint
-acceleration, which here would have to be differenced from a command arriving at
-250 Hz into a 1 kHz loop - a train of spikes rather than an acceleration. That
-is the same trap the velocity admittance fell into, and the lesson is the same
-one: a feedforward is only as good as the derivative it is built on.
+**PID simulation enables position feedforward for translational base inertia.**
+The launch reads `inertia_feedforward` from `sim_vel_controller.yaml`.
+Start the Cartesian controller and PID as in §4.3, hold a world-fixed target,
+and run `gantry_disturbance.launch` as above. For an A/B comparison, set the
+parameter to false and reload the Cartesian controller. Keep the three outer
+velocity admittance matrices at zero.
+
+For X, Y and Z disturbances, the gantry node publishes the analytic derivative
+of its velocity command, including the ramps, on
+`/gantry/base_linear_acceleration`. It is a simulation-time stamped
+`geometry_msgs/Vector3Stamped` in m/s² and expressed in `base_link`.
+Other sources can publish a translational acceleration using the same interface
+or set `base_acceleration_topic`. This model assumes a translating base and a
+world-fixed end-effector target.
+
+The payload-aware KDL chain supplies both the joint inertia needed to hold the
+tool in world and the inertial coupling from the accelerating base. The
+controller adds their sum as an equivalent position offset by solving
+`D·Δq̇ + P·Δq = τ_inertia` with the Gazebo PD gains read at load time.
+Stale input, damped IK and reference clipping cause the controller to decay the
+affected offset with zero extra torque.
+
+At the SRDF `init` pose, two A/B runs with a 20 mm Y-axis gantry disturbance
+reduced mean fundamental transmission from 32.5% to 30.8% at 3 Hz and from
+64.1% to 60.6% at 5 Hz. The 1 Hz results were about 8%, with the difference
+between on and off varying across trials. The measurements use a single-tone
+least-squares fit over whole cycles.
 
 ### 4.5 Tuning
 

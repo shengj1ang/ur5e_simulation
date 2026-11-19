@@ -15,6 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   kdl_parser
   kdl_conversions
+  geometry_msgs
   nav_msgs
   std_msgs
   message_generation
@@ -35,7 +36,7 @@ set(CMAKE_CXX_FLAGS "-O2 -O3 -std=c++11 -mtune=native -fPIC -Wall -Wno-deprecate
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES sim_cartesian_velocity_control
-  CATKIN_DEPENDS message_runtime std_msgs
+  CATKIN_DEPENDS geometry_msgs message_runtime std_msgs
 )
 
 include_directories(include ${catkin_INCLUDE_DIRS})

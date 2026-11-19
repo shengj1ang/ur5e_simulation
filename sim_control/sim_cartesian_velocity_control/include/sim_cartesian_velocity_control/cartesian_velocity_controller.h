@@ -1,9 +1,12 @@
 #ifndef CARTESIAN_VELOCITY_CONTROLLER_H
 #define CARTESIAN_VELOCITY_CONTROLLER_H
 
+#include <array>
+#include <memory>
 #include <ros/node_handle.h>
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/Pose.h>
+#include <geometry_msgs/Vector3Stamped.h>
 #include <nav_msgs/Odometry.h>
 #include <hardware_interface/joint_command_interface.h>
 #include <controller_interface/controller.h>
@@ -12,7 +15,9 @@
 #include <kdl/chaindynparam.hpp>
 #include <kdl/chainfksolvervel_recursive.hpp>
 #include <kdl/chainfksolverpos_recursive.hpp>
+#include <kdl/chainjnttojacdotsolver.hpp>
 #include "sim_cartesian_velocity_control/kinematic_chain_controller_base.h"
+#include <realtime_tools/realtime_buffer.h>
 #include <realtime_tools/realtime_publisher.h>
 
 namespace controller_interface
@@ -65,7 +70,7 @@ public:
 
   /** \brief Write current commands to the hardware interface
    */
-  virtual void writeVelocityCommands(const ros::Duration& period) = 0;
+  virtual void writeVelocityCommands(const ros::Time& time, const ros::Duration& period) = 0;
 
   /** \brief Build the dynamics model and find the joint stiffness it needs */
   void setupFeedforward(ros::NodeHandle &n);
@@ -76,10 +81,9 @@ public:
    */
   void computeFeedforwardOffset();
 
-  /** \brief Scale q_dt_cmd_ down uniformly when its norm exceeds
-   * max_joint_velocity_, so that the direction of the motion is preserved.
+  /** \brief Scale q_dt_cmd_ uniformly if it exceeds the cap and report clipping.
    */
-  void limitJointVelocities();
+  bool limitJointVelocities();
 
 protected:
   ros::Subscriber sub_command_; // Interface to external commands
@@ -91,6 +95,7 @@ protected:
   // re-read from the joint handles every cycle - see the comment on
   // CartesianVelocityControllerSim::writeVelocityCommands.
   KDL::JntArray q_cmd_;
+  bool reference_unconstrained_ = false;
 
   boost::shared_ptr<KDL::ChainIkSolverVel> ik_vel_solver_;
 
@@ -143,7 +148,7 @@ class CartesianVelocityController :
     /**
      * Write velocity commands through a velocity interface
      */
-    void writeVelocityCommands(const ros::Duration& period);
+    void writeVelocityCommands(const ros::Time& time, const ros::Duration& period) override;
 };
 
 /**
@@ -154,10 +159,38 @@ class CartesianVelocityController :
 class CartesianVelocityControllerSim :
   public CartesianVelocityControllerBase<hardware_interface::PositionJointInterface> 
 {
+public:
+  bool init(hardware_interface::PositionJointInterface* robot, ros::NodeHandle& n) override;
+  void starting(const ros::Time& time) override;
+
+private:
+  void baseAccelerationCallback(const geometry_msgs::Vector3StampedConstPtr& msg);
+  bool computeInertialTorque(const ros::Time& time);
+
   /**
    * Write velocity commands through a position interface
    */
-  void writeVelocityCommands(const ros::Duration& period);
+  void writeVelocityCommands(const ros::Time& time, const ros::Duration& period) override;
+
+  struct BaseAcceleration
+  {
+    ros::Time stamp;
+    KDL::Vector linear = KDL::Vector::Zero();
+  };
+  realtime_tools::RealtimeBuffer<BaseAcceleration> base_acceleration_;
+  ros::Time started_at_;
+  std::string root_name_;
+  bool inertia_feedforward_enabled_ = false;
+  std::vector<double> joint_proportional_gain_;
+  std::vector<double> joint_damping_;
+  KDL::JntArray inertial_offset_;
+  KDL::JntArray reference_acceleration_;
+  KDL::JntArray translation_torque_;
+  KDL::JntArray inertial_torque_;
+  KDL::JntSpaceInertiaMatrix arm_inertia_;
+  std::unique_ptr<KDL::ChainJntToJacDotSolver> jacobian_dot_;
+  std::array<std::unique_ptr<KDL::ChainDynParam>, 3> unit_acceleration_models_;
+  ros::Subscriber base_acceleration_subscriber_;
 };
 
 } // namespace controller_interface
