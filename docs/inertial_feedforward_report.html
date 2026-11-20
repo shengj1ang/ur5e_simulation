@@ -129,6 +129,7 @@
     <p>第二轮固定底座状态更新率为 200 Hz，在同一次启动中比较三种映射。除 3 Hz 和 5 Hz 单频复测外，叠加 0.5–8 Hz 内的 13 个正弦分量，合成指令位移的峰值为 20 mm<sup>[2]</sup>。六组使用不同相位组合，组内三种配置采用相同波形，遍历六种试次顺序。先按时间戳用最小二乘联合拟合各频率分量及线性漂移，再报告逐频传递率和整段去趋势位移的均方根（RMS）之比。</p>
     <p>PID 调参固定 200 Hz 和动态惯性映射，只更改 Y 向比例与微分增益。先用两套 20 mm 多频波形筛选十组增益，再用独立相位的 20 mm 和 30 mm 波形各做六组配对验证。每次更换增益只重启外环 PID，重新下发同一个世界系目标。每段扰动前记录 2.5 s 的静止末端位置，用去趋势 RMS 检查抖动。</p>
     <p>随后用同一组 20 mm 和 30 mm 多频波形复测两个问题。在 <code>init</code> 姿态和新 PID 下，仅通过是否送入解析加速度切换惯性前馈，两组均保留重力和科氏补偿。再在 SRDF 的取料起始姿态 <code>1st_reco_start</code> 固定动态惯性前馈，对照原 PID 和新 PID。两项复测均在 200 Hz 下按振幅各做六组换序配对。</p>
+    <p>加速度来源对照固定新 PID、200 Hz 和 <code>init</code> 姿态，比较原始指令加速度、按龙门速度环修正的指令加速度，以及实测基座速度的因果估算。实测估算用最近三个带时间戳的速度样本求导，再经 35 Hz 一阶低通。30 mm 多频扰动和平滑往返脉冲各做六组，组内遍历三种来源。多频误差去除拟合的慢漂移，脉冲误差参考脉冲前的平均位置。</p>
   </section>
 
   <section aria-labelledby="results">
@@ -191,6 +192,19 @@
       <img src="img/inertia_and_pid_pose_followup.png" width="2235" height="960" alt="左图为 init 姿态下新 PID 的惯性前馈开关对照，20 mm 工况的两个配对区间均高于零。右图为取料起始姿态的 PID 对照，两种振幅下的配对区间均高于零。">
       <figcaption><strong>图 5.</strong> 新 PID 下的惯性前馈开关对照，以及取料起始姿态的 PID 复测。灰点为六组配对差，误差棒为 95% 置信区间。正值表示开启惯性前馈或采用新 PID 后的传递率降低。</figcaption>
     </figure>
+    <div class="table-frame">
+      <table>
+        <caption>表 4　30 mm 扰动下三种加速度来源的末端误差（mm，六组均值）</caption>
+        <thead><tr><th scope="col">工况与指标</th><th scope="col">原始指令</th><th scope="col">龙门模型修正</th><th scope="col">实测估算</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">多频 RMS</th><td>1.123</td><td>1.153</td><td>1.123</td></tr>
+          <tr><th scope="row">多频峰值</th><td>3.102</td><td>3.285</td><td>3.105</td></tr>
+          <tr><th scope="row">脉冲 RMS</th><td>0.280</td><td>0.273</td><td>0.282</td></tr>
+          <tr><th scope="row">脉冲峰值</th><td>0.967</td><td>0.940</td><td>0.964</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>实测估算相对龙门模型修正的 RMS 配对改善为多频 0.030 [−0.170, 0.230] mm、脉冲 −0.009 [−0.074, 0.056] mm。两种工况下的 RMS 和峰值配对区间均跨零。36 段试验的惯性前馈在测量窗口内持续生效，未记录关节限速告警或力矩钳位。</p>
   </section>
 
   <section aria-labelledby="discussion">
@@ -212,7 +226,8 @@
       <p>新 PID 下惯性前馈开关的<a href="experiments/inertia_mapping_200hz/tuned-inertia-trials.csv">逐段统计</a>与<a href="experiments/inertia_mapping_200hz/tuned-inertia-responses.csv">逐频结果</a>可用 <code>bash run.sh 新输出目录 --compare-tuned-inertia</code> 复试。取料起始姿态的<a href="experiments/inertia_mapping_200hz/second-pose-gain-trials.csv">逐段统计</a>与<a href="experiments/inertia_mapping_200hz/second-pose-gain-responses.csv">逐频结果</a>可用 <code>bash run.sh 新输出目录 --pose 1st_reco_start --validate-gains 12.0 0.35 --full-validation</code> 复试。绘图用 <code>python3 analyze_followup.py 数据目录 图像路径</code>。原始话题位于 VM 的 <code>/tmp/ur5e-pid-inertia-followup.bpkZvB</code>。</p>
       <p>加速度对照用同一拟合窗口内的基座速度相量乘以 <i>jω</i>，再与按原始种子重建的解析指令加速度比较。对 30 mm 开启组的 8 Hz 分量，用位移相量乘以 −<i>ω</i><sup>2</sup> 交叉复算，两种估计的幅值相差不超过 0.12%，相位相差不超过 1.66°。<a href="experiments/inertia_mapping_200hz/base-acceleration-comparison.csv">逐频数据</a>可用 <code>python3 check_base_acceleration.py 原始base.csv 数据目录 输出.csv</code> 复算。</p>
       <p>基座响应校正的<a href="experiments/inertia_mapping_200hz/base-response-verification.csv">验证数据</a>可用 <code>bash run_verify.sh 新输出目录</code> 复测，该脚本在每个频点上将发布的加速度与基座速度相量乘 <i>jω</i> 对比，并以 <code>_base_response_frequency:=0</code> 的未校正运行作为对照。模型由 base-acceleration-comparison.csv 的 312 行数据拟合，涵盖两种行程与开关两种状态。</p>
-      <p>常用启动可用 <code>bash run_standard.sh 新输出目录 200</code> 复验。交还 MoveIt 后等待实测关节稳定，再从实际姿态规划至 <code>1st_reco_start</code>。<a href="experiments/inertia_mapping_200hz/standard-bringup-smoke.csv">启动检查记录</a>含显式 50 Hz、显式 200 Hz 和默认 200 Hz 三次运行。</p>
+      <p>三种加速度来源的<a href="experiments/inertia_mapping_200hz/acceleration-source-trials.csv">配对试次</a>可用 <code>bash run.sh 新输出目录 --compare-acceleration-sources</code> 复测。<code>python3 analyze_acceleration_sources.py 原始记录目录 输出.csv</code> 从 ROS 位置话题重算峰值与 RMS。原始记录位于 VM 的 <code>/tmp/ur5e-accel-source.k2tWhu/source-verified</code>。</p>
+      <p>常用启动可用 <code>bash run_standard.sh 新输出目录 200</code> 复验。交还控制使用 <code>roslaunch sim_bringup init_pose_start_controllers.launch mode:=moveit</code>，由实测关节位置确认稳定后再规划。该命令已在正常启动流程中验证，从 PID 切回后成功执行 <code>1st_reco_start</code>。<a href="experiments/inertia_mapping_200hz/standard-bringup-smoke.csv">启动检查记录</a>含显式 50 Hz、显式 200 Hz 和默认 200 Hz 三次运行。</p>
     </details>
   </section>
 

@@ -121,17 +121,12 @@ def main(out, expected_rate):
                   f"transfer {transfer:.2f}%, inertia active {100*gated:.1f}%, RTF {rtf:.3f}", flush=True)
 
     rosnode.kill_nodes(["/sim_pid_controller"])
-    assert switch([TRAJECTORY], [ARM], 2, False, 5.0).ok
+    handoff = subprocess.run(
+        ["roslaunch", "sim_bringup", "init_pose_start_controllers.launch", "mode:=moveit"],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=18)
+    (out/"moveit-handoff.log").write_text(handoff.stdout)
+    assert "MoveIt handoff ready" in handoff.stdout, handoff.stdout
     assert state(TRAJECTORY) == "running" and state(ARM) == "stopped"
-    # After switching out of the gravity-compensated controller, wait for the
-    # measured joints to settle before planning from their actual positions.
-    for _ in range(12):
-        positions = np.array(group.get_current_joint_values())
-        rospy.sleep(.35)
-        if np.max(np.abs(np.array(group.get_current_joint_values())-positions)) < .001:
-            break
-    else:
-        raise RuntimeError("Joints did not settle after handing control back to MoveIt")
     move_to("1st_reco_start")
     print("PASS: normal Gazebo and MoveIt bringup, MoveIt -> PID -> MoveIt", flush=True)
 

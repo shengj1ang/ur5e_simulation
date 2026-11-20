@@ -1,9 +1,12 @@
 <launch>
 
-  <rosparam file="$(find sim_bringup)/config/initial_pose.yaml" command="load"/>
+  <arg name="mode" default="cartesian" doc="cartesian initializes the pose, moveit switches back and waits for measured joint positions to settle"/>
+  <rosparam file="$(find sim_bringup)/config/initial_pose.yaml" command="load"
+            if="$(eval arg('mode') == 'cartesian')"/>
 
-  <!-- SET INITIAL POSE -->
-  <node name="set_initial_pose_node" pkg="sim_bringup" type="init_pose_start_controllers.py" output="screen"/>
+  <node name="set_initial_pose_node" pkg="sim_bringup" type="init_pose_start_controllers.py" output="screen">
+    <param name="mode" value="$(arg mode)"/>
+  </node>
 
 </launch>
 

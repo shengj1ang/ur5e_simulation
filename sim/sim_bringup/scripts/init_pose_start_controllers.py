@@ -7,18 +7,21 @@
 #   roslaunch sim_bringup with_moveit_new.launch
 #   roslaunch sim_bringup init_pose_start_controllers.launch
 #
-# Note that this takes the arm away from MoveIt: arm_joint_controller and
-# sim_cartesian_velocity_controller_sim claim the same six joints, so the switch
-# below stops the trajectory controller. Start it again to plan with MoveIt:
-#   rosrun controller_manager controller_manager stop sim_cartesian_velocity_controller_sim
-#   rosrun controller_manager controller_manager start arm_joint_controller
+# The two controllers claim the same arm joints. To hand them back to MoveIt
+# and wait for the measured positions to settle before planning:
+#   roslaunch sim_bringup init_pose_start_controllers.launch mode:=moveit
 #
 
 import rospy
 import subprocess
+import math
+import threading
+import time
+from collections import deque
 
 from gazebo_msgs.srv import SetModelConfiguration, SetModelConfigurationRequest
-from controller_manager_msgs.srv import SwitchController, SwitchControllerRequest
+from controller_manager_msgs.srv import ListControllers, SwitchController, SwitchControllerRequest
+from sensor_msgs.msg import JointState
 
 SET_MODEL_CONFIGURATION = "/gazebo/set_model_configuration"
 SWITCH_CONTROLLER = "/controller_manager/switch_controller"
@@ -81,9 +84,86 @@ def start_ros_controllers():
     return res.ok
 
 
+def wait_for_arm_settle(joint_names):
+    """Verify a continuous 350 ms of measured arm positions within 1 mrad."""
+    poses = deque()
+    changed = threading.Condition()
+    window = .35
+
+    def sample(msg):
+        joints = dict(zip(msg.name, msg.position))
+        if any(name not in joints or not math.isfinite(joints[name]) for name in joint_names):
+            return
+        stamp = msg.header.stamp.to_sec()
+        if stamp <= 0:
+            return
+        with changed:
+            if poses and stamp == poses[-1][0]:
+                return
+            if poses and not 0 < stamp-poses[-1][0] <= .12:
+                poses.clear()
+            poses.append((stamp, [joints[name] for name in joint_names]))
+            while len(poses) >= 2 and stamp-poses[1][0] >= window:
+                poses.popleft()
+            changed.notify()
+
+    subscriber = rospy.Subscriber("/joint_states", JointState, sample, queue_size=10)
+    deadline = time.monotonic()+5.0
+    try:
+        with changed:
+            while not rospy.is_shutdown() and time.monotonic() < deadline:
+                if len(poses) >= 4 and poses[-1][0]-poses[0][0] >= window:
+                    axes = zip(*(joints for _, joints in poses))
+                    if all(max(axis)-min(axis) <= .001 for axis in axes):
+                        return True
+                changed.wait(timeout=.10)
+    finally:
+        subscriber.unregister()
+    return False
+
+
+def return_to_moveit():
+    list_topic = "/controller_manager/list_controllers"
+    rospy.wait_for_service(list_topic, timeout=5)
+    rospy.wait_for_service(SWITCH_CONTROLLER, timeout=5)
+    listing = rospy.ServiceProxy(list_topic, ListControllers)
+    states = {c.name: c.state for c in listing().controller}
+    if states.get(TRAJECTORY_CONTROLLER) != "running" or states.get(ARM_CONTROLLER) == "running":
+        req = SwitchControllerRequest()
+        if states.get(TRAJECTORY_CONTROLLER) != "running":
+            req.start_controllers = [TRAJECTORY_CONTROLLER]
+        if states.get(ARM_CONTROLLER) == "running":
+            req.stop_controllers = [ARM_CONTROLLER]
+        req.strictness = req.STRICT
+        req.timeout = 3.0
+        if not rospy.ServiceProxy(SWITCH_CONTROLLER, SwitchController)(req).ok:
+            rospy.logerr("Could not hand the joints back to MoveIt")
+            return False
+    states = {c.name: c.state for c in listing().controller}
+    if states.get(TRAJECTORY_CONTROLLER) != "running" or states.get(ARM_CONTROLLER) == "running":
+        rospy.logerr("Unexpected controller state after switching to MoveIt")
+        return False
+    joint_names = rospy.get_param("/"+TRAJECTORY_CONTROLLER+"/joints")
+    if not joint_names or not wait_for_arm_settle(joint_names):
+        rospy.logerr("Arm joints did not settle within 5 s. Wait or check /joint_states before planning.")
+        return False
+    rospy.loginfo("MoveIt handoff ready: measured arm joints have settled")
+    return True
+
+
 if __name__ == "__main__":
     # Service calls need an initialised node, so this has to come first.
     rospy.init_node("set_initial_pose_node")
+    mode = rospy.get_param("~mode", "cartesian")
+    if mode == "moveit":
+        try:
+            raise SystemExit(0 if return_to_moveit() else 1)
+        except (KeyError, rospy.ROSException, rospy.ServiceException) as exc:
+            rospy.logerr("MoveIt handoff failed: %s", exc)
+            raise SystemExit(1)
+    if mode != "cartesian":
+        rospy.logerr("Expected mode cartesian or moveit, got %s", mode)
+        raise SystemExit(1)
     model_name = rospy.get_param("~model_name", DEFAULT_MODEL_NAME)
 
     pause_gazebo()

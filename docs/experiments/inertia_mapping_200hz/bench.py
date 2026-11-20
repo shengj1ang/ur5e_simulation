@@ -3,7 +3,9 @@
 
 import argparse
 import csv
+import importlib.util
 from itertools import permutations
+import os
 from pathlib import Path
 import time
 from xml.etree import ElementTree
@@ -35,6 +37,24 @@ PROFILES = {
     "single_5hz": (np.array([5.0]), 4.0),
     "multisine": (np.array([0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 6, 7, 8]), 8.0),
 }
+
+
+def load_base_response():
+    """The gantry velocity-loop correction, as the bringup node applies it.
+
+    Imported from gantry_disturbance.py rather than copied, so the model has
+    one home. UR5E_BENCH_BASE_RESPONSE=off publishes the commanded
+    acceleration instead, which is what the runs recorded here were measured
+    with and what reproduces them.
+    """
+    if os.environ.get("UR5E_BENCH_BASE_RESPONSE", "on") == "off":
+        return None
+    path = Path(rospkg.RosPack().get_path("sim_bringup"))/"scripts"/"gantry_disturbance.py"
+    spec = importlib.util.spec_from_file_location("gantry_disturbance", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return lambda: module.BaseResponse(module.BASE_RESPONSE_FREQUENCY,
+                                       module.BASE_RESPONSE_DAMPING)
 
 
 def window(t, steady_end):
@@ -90,11 +110,18 @@ def main(out, args):
     configured_rate = rospy.get_param("/mapping_bench_base_rate")
     base, tip, inertia = [], [], []
     base_pose = None
+    measured_acceleration = None
+    if args.compare_acceleration_sources:
+        from acceleration_sources import VelocityAcceleration
+        estimator = VelocityAcceleration()
 
     def read_base(msg):
-        nonlocal base_pose
+        nonlocal base_pose, measured_acceleration
         base_pose = msg.pose.pose
         base.append((msg.header.stamp.to_sec(), msg.pose.pose.position.y))
+        if args.compare_acceleration_sources:
+            value = estimator.update(msg.header.stamp.to_sec(), msg.twist.twist.linear.y)
+            measured_acceleration = (msg.header.stamp, value, base_pose.orientation) if value is not None else None
 
     def read_tip(msg):
         tip.append((msg.header.stamp.to_sec(), msg.pose.pose.position.y))
@@ -112,6 +139,9 @@ def main(out, args):
     command = rospy.Publisher(f"/{GANTRY}/command", Float64MultiArray, queue_size=1, tcp_nodelay=True)
     acceleration = rospy.Publisher("/gantry/base_linear_acceleration", Vector3Stamped,
                                    queue_size=1, tcp_nodelay=True)
+    base_response = load_base_response()
+    rospy.loginfo("bench: base response correction %s",
+                  "on" if base_response else "off")
     mapping = rospy.Publisher(f"/{ARM}/use_static_inertia_mapping", Bool,
                               latch=True, queue_size=1, tcp_nodelay=True)
     hold = rospy.Publisher("/now_equilibrium", PoseStamped, queue_size=1)
@@ -156,29 +186,46 @@ def main(out, args):
             rospy.sleep(.025)
         raise RuntimeError(f"Stationary mapping switch to {mode} did not complete")
 
-    def run_leg(profile, block, mode, omega, phase, amplitude, duration):
+    def run_leg(profile, block, mode, omega, phase, amplitude, duration, source=None, pulse=None):
         select(mode)
         indices = tuple(map(len, (base, tip, inertia)))
         steady_end = FIT_DELAY + duration + .1
         start = rospy.Time.now()
         start_wall = time.monotonic()
         rate = rospy.Rate(200)
+        response = base_response() if base_response and source in (None, "model") else None
+        last_t = None
+        last_sample = None
         while not rospy.is_shutdown():
             now = rospy.Time.now()
             t = (now-start).to_sec()
             if t >= steady_end+RAMP:
                 break
-            env, d_env, dd_env = window(t, steady_end)
-            angles = omega*t + phase
-            x = amplitude * np.sin(angles)
-            v = amplitude*omega * np.cos(angles)
-            a = -(omega**2)*x
-            command.publish(Float64MultiArray(data=[0.0, env*v.sum()+d_env*x.sum(), 0.0, 0.0]))
-            if mode != "off":
-                msg = Vector3Stamped()
-                msg.header.stamp, msg.header.frame_id = now, "base_link"
+            if pulse is None:
+                env, d_env, dd_env = window(t, steady_end)
+                angles = omega*t + phase
+                x = amplitude * np.sin(angles)
+                v = amplitude*omega * np.cos(angles)
+                a = -(omega**2)*x
+                velocity = env*v.sum()+d_env*x.sum()
                 acc = env*a.sum() + 2*d_env*v.sum() + dd_env*x.sum()
-                q = base_pose.orientation
+            else:
+                velocity, acc = pulse(t-FIT_DELAY)
+            command.publish(Float64MultiArray(data=[0.0, velocity, 0.0, 0.0]))
+            if mode != "off":
+                stamp, q = now, base_pose.orientation
+                if source == "measured":
+                    sample = measured_acceleration
+                    if sample is None or sample[0] == last_sample or not 0 <= (now-sample[0]).to_sec() <= .025:
+                        rate.sleep()
+                        continue
+                    stamp, acc, q = sample
+                    last_sample = stamp
+                elif response is not None:
+                    acc = response(acc, 0. if last_t is None else t-last_t)
+                    last_t = t
+                msg = Vector3Stamped()
+                msg.header.stamp, msg.header.frame_id = stamp, "base_link"
                 world_y_in_base = quaternion_matrix([q.x, q.y, q.z, q.w])[1, :3]
                 msg.vector.x, msg.vector.y, msg.vector.z = acc * world_y_in_base
                 acceleration.publish(msg)
@@ -198,6 +245,12 @@ def main(out, args):
         assert np.all((.65*amplitude <= abs(p_base)) & (abs(p_base) <= 1.35*amplitude)), (
             profile, mode, abs(p_base)/amplitude)
         return begin, p_base, p_tip, base_rms, tip_rms, base_rate, active, diag, rtf
+
+    if args.compare_acceleration_sources:
+        from acceleration_sources import compare_sources
+        assert base_response is not None and configured_rate == 200
+        compare_sources(out, run_leg, base, tip)
+        return
 
     if args.compare_tuned_inertia:
         from inertia_followup import compare_tuned_inertia
@@ -253,5 +306,6 @@ if __name__ == "__main__":
     suite.add_argument("--tune", action="store_true")
     suite.add_argument("--validate-gains", type=float, nargs=2, metavar=("KP_Y", "KD_Y"))
     suite.add_argument("--compare-tuned-inertia", action="store_true")
+    suite.add_argument("--compare-acceleration-sources", action="store_true")
     args = parser.parse_args()
     main(args.output, args)
