@@ -211,4 +211,9 @@ include_directories(
 # endif()
 
 ## Add folders to be run by python nosetests
-# catkin_add_nosetests(test)
+# The settle check in init_pose_start_controllers.py mixes simulated and wall
+# time on purpose; test/ drives both clocks so the failure paths are exercised
+# without waiting in real time.
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_nosetests(test)
+endif()

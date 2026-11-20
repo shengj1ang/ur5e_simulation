@@ -108,10 +108,31 @@ def wait_for_arm_settle(joint_names):
             changed.notify()
 
     subscriber = rospy.Subscriber("/joint_states", JointState, sample, queue_size=10)
-    deadline = time.monotonic()+5.0
+    last_ros_time = rospy.get_time()
+    settle_deadline = last_ros_time + 5.0 if last_ros_time > 0.0 else None
+    clock_deadline = time.monotonic() + 60.0
     try:
         with changed:
-            while not rospy.is_shutdown() and time.monotonic() < deadline:
+            while not rospy.is_shutdown():
+                ros_now = rospy.get_time()
+                wall_now = time.monotonic()
+                if ros_now < last_ros_time:
+                    poses.clear()
+                    settle_deadline = None
+                if ros_now != last_ros_time:
+                    # Slow simulation is fine as long as its clock keeps moving.
+                    last_ros_time = ros_now
+                    clock_deadline = wall_now + 60.0
+                if settle_deadline is None and ros_now > 0.0:
+                    settle_deadline = ros_now + 5.0
+                if settle_deadline is not None and ros_now >= settle_deadline:
+                    rospy.logerr("MoveIt controllers are active, but joint stability was not confirmed "
+                                 "within 5 seconds of ROS time. Check arm motion and /joint_states before planning.")
+                    return False
+                if wall_now >= clock_deadline:
+                    rospy.logerr("MoveIt controllers are active, but ROS time has not advanced for "
+                                 "60 seconds of wall time. Check /clock and Gazebo before planning.")
+                    return False
                 if len(poses) >= 4 and poses[-1][0]-poses[0][0] >= window:
                     axes = zip(*(joints for _, joints in poses))
                     if all(max(axis)-min(axis) <= .001 for axis in axes):
@@ -143,9 +164,11 @@ def return_to_moveit():
     if states.get(TRAJECTORY_CONTROLLER) != "running" or states.get(ARM_CONTROLLER) == "running":
         rospy.logerr("Unexpected controller state after switching to MoveIt")
         return False
-    joint_names = rospy.get_param("/"+TRAJECTORY_CONTROLLER+"/joints")
-    if not joint_names or not wait_for_arm_settle(joint_names):
-        rospy.logerr("Arm joints did not settle within 5 s. Wait or check /joint_states before planning.")
+    joint_names = rospy.get_param("/"+TRAJECTORY_CONTROLLER+"/joints", [])
+    if not joint_names:
+        rospy.logerr("MoveIt controllers are active, but the trajectory controller has no configured joints.")
+        return False
+    if not wait_for_arm_settle(joint_names):
         return False
     rospy.loginfo("MoveIt handoff ready: measured arm joints have settled")
     return True
