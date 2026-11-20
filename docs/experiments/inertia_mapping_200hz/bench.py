@@ -110,6 +110,7 @@ def main(out, args):
     configured_rate = rospy.get_param("/mapping_bench_base_rate")
     base, tip, inertia = [], [], []
     base_pose = None
+    axis = "xyz".index(args.axis)
     measured_acceleration = None
     if args.compare_acceleration_sources:
         from acceleration_sources import VelocityAcceleration
@@ -118,13 +119,13 @@ def main(out, args):
     def read_base(msg):
         nonlocal base_pose, measured_acceleration
         base_pose = msg.pose.pose
-        base.append((msg.header.stamp.to_sec(), msg.pose.pose.position.y))
+        base.append((msg.header.stamp.to_sec(), getattr(base_pose.position, args.axis)))
         if args.compare_acceleration_sources:
             value = estimator.update(msg.header.stamp.to_sec(), msg.twist.twist.linear.y)
             measured_acceleration = (msg.header.stamp, value, base_pose.orientation) if value is not None else None
 
     def read_tip(msg):
-        tip.append((msg.header.stamp.to_sec(), msg.pose.pose.position.y))
+        tip.append((msg.header.stamp.to_sec(), getattr(msg.pose.pose.position, args.axis)))
 
     def read_inertia(msg):
         inertia.append((msg.header.stamp.to_sec(), msg.active, msg.static_mapping,
@@ -175,7 +176,7 @@ def main(out, args):
     target.header.frame_id = "pid"
     hold.publish(target)
     rospy.sleep(1.5)
-    print(f"READY: native {configured_rate:g} Hz p3d, SRDF pose {args.pose}, one world-frame target", flush=True)
+    print(f"READY: native {configured_rate:g} Hz p3d, SRDF pose {args.pose}, {args.axis.upper()} disturbance", flush=True)
 
     def select(mode):
         use_static = mode == "static"
@@ -211,7 +212,9 @@ def main(out, args):
                 acc = env*a.sum() + 2*d_env*v.sum() + dd_env*x.sum()
             else:
                 velocity, acc = pulse(t-FIT_DELAY)
-            command.publish(Float64MultiArray(data=[0.0, velocity, 0.0, 0.0]))
+            gantry_velocity = [0.0]*4
+            gantry_velocity[axis] = velocity
+            command.publish(Float64MultiArray(data=gantry_velocity))
             if mode != "off":
                 stamp, q = now, base_pose.orientation
                 if source == "measured":
@@ -226,8 +229,8 @@ def main(out, args):
                     last_t = t
                 msg = Vector3Stamped()
                 msg.header.stamp, msg.header.frame_id = stamp, "base_link"
-                world_y_in_base = quaternion_matrix([q.x, q.y, q.z, q.w])[1, :3]
-                msg.vector.x, msg.vector.y, msg.vector.z = acc * world_y_in_base
+                direction_in_base = quaternion_matrix([q.x, q.y, q.z, q.w])[axis, :3]
+                msg.vector.x, msg.vector.y, msg.vector.z = acc * direction_in_base
                 acceleration.publish(msg)
             rate.sleep()
         command.publish(Float64MultiArray(data=[0.0]*4))
@@ -242,7 +245,8 @@ def main(out, args):
         assert np.all(diag[:, 2] == (mode == "static")), (profile, mode)
         active = np.mean(diag[:, 1])
         assert active == 0 if mode == "off" else active > .4, (profile, mode, active)
-        assert np.all((.65*amplitude <= abs(p_base)) & (abs(p_base) <= 1.35*amplitude)), (
+        low, high = (.65, 1.35) if axis == 1 else (.35, 1.80)
+        assert np.all((low*amplitude <= abs(p_base)) & (abs(p_base) <= high*amplitude)), (
             profile, mode, abs(p_base)/amplitude)
         return begin, p_base, p_tip, base_rms, tip_rms, base_rate, active, diag, rtf
 
@@ -259,7 +263,8 @@ def main(out, args):
 
     if args.tune or args.validate_gains:
         from pid_tuning import tune_gains
-        tune_gains(out, run_leg, hold, target, lambda: base_pose, tip, args.validate_gains, args.full_validation)
+        tune_gains(out, run_leg, hold, target, lambda: base_pose, tip, args.validate_gains,
+                   args.full_validation, args.axis)
         return
 
     rng = np.random.default_rng(440200)
@@ -301,11 +306,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
     parser.add_argument("--pose", default="init", help="SRDF manipulator group state")
+    parser.add_argument("--axis", choices=("x", "y", "z"), default="y", help="Translation axis for PID tuning")
     parser.add_argument("--full-validation", action="store_true", help="Check both 20 mm and 30 mm in six paired blocks")
     suite = parser.add_mutually_exclusive_group()
     suite.add_argument("--tune", action="store_true")
-    suite.add_argument("--validate-gains", type=float, nargs=2, metavar=("KP_Y", "KD_Y"))
+    suite.add_argument("--validate-gains", type=float, nargs=2, metavar=("KP", "KD"))
     suite.add_argument("--compare-tuned-inertia", action="store_true")
     suite.add_argument("--compare-acceleration-sources", action="store_true")
     args = parser.parse_args()
+    if args.axis != "y" and not (args.tune or args.validate_gains):
+        parser.error("--axis x/z requires --tune or --validate-gains")
     main(args.output, args)

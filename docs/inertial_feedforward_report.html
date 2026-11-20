@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>基于动力学前馈的 UR5e 末端抗扰控制</title>
+  <title>UR5e 末端抗扰的动力学前馈与反馈调节</title>
   <style>
     :root { color-scheme: light; }
     * { box-sizing: border-box; }
@@ -15,7 +15,10 @@
     header p { color: #444; font-size: .94rem; margin: .5rem 0 0; }
     h2 { margin: 1.55rem 0 .4rem; font-size: 1.24rem; line-height: 1.5; }
     h2 span { margin-left: .55rem; font-size: .92em; font-weight: normal; color: #424242; }
+    h3 { margin: 1.12rem 0 .36rem; font-size: 1.03rem; line-height: 1.5; }
     p { margin: .46rem 0; }
+    .abstract { margin: 1rem auto 1.45rem; font-size: .94rem; }
+    .abstract strong { margin-right: .55em; }
     a { color: #262626; text-underline-offset: .13em; }
     .equation { display: grid; grid-template-columns: minmax(0, 1fr) auto;
       align-items: center; column-gap: .65rem; margin: .64rem 0; }
@@ -47,7 +50,7 @@
     @media print {
       article { margin: 0 auto; padding: 0; max-width: none; }
       body { font-size: 10.5pt; }
-      h2 { break-after: avoid; }
+      h2, h3, caption { break-after: avoid; }
       figure img { max-height: 9cm; object-fit: contain; }
     }
   </style>
@@ -55,17 +58,22 @@
 <body>
 <article>
   <header>
-    <h1>基于动力学前馈的 UR5e 末端抗扰控制</h1>
+    <h1>UR5e 末端抗扰的动力学前馈与反馈调节</h1>
     <p>基座平移扰动下的 Gazebo 仿真试验</p>
   </header>
 
+  <section class="abstract" aria-labelledby="abstract">
+    <p><strong id="abstract">摘要</strong>针对龙门平移引起的 UR5e 末端位姿偏差，采用世界系 PID 反馈与动力学前馈。参考导纳控制的力到运动映射，将模型力矩转换为关节位置补偿。底座状态更新率由 50 Hz 提至 200 Hz 后，末端位移传递率下降。调参使 X 向末端位移 RMS 降低 34%，Y 向在两个姿态下均降低约三成，Z 向保留原增益。采用新 PID 后，在 <code>init</code> 姿态和 20 mm Y 向扰动下，开启惯性前馈将末端 RMS 由 0.82 降至 0.76 mm。30 mm 下的额外收益仍不确定。</p>
+  </section>
+
   <section aria-labelledby="introduction">
     <h2 id="introduction">1　引言<span lang="en">Introduction</span></h2>
-    <p>龙门平移会带动机械臂基座，本文的控制目标是使末端保持在世界坐标系的给定位姿。控制器用位姿反馈纠正实际偏差，并用含末端负载的机械臂动力学模型估算补偿力矩。参考导纳控制中从力到运动的映射<sup>[1]</sup>，模型力矩经关节弹簧–阻尼关系转换为位置前馈。试验考察映射方式、基座状态更新率与反馈增益对末端抗扰的影响。</p>
+    <p>龙门平移会带动机械臂基座，使末端偏离世界坐标系中的目标。本研究用位姿反馈纠偏，并用含末端负载的动力学模型估计关节补偿力矩。参考导纳控制中从力到运动的关系<sup>[1]</sup>，通过关节弹簧–阻尼模型将力矩换算为位置前馈。试验依次考察底座状态更新率、反馈调参和惯性前馈各自对末端误差的影响。</p>
   </section>
 
   <section aria-labelledby="methodology">
     <h2 id="methodology">2　方法<span lang="en">Methodology</span></h2>
+    <h3>2.1　世界系反馈与关节动力学前馈</h3>
     <p>外环由世界系位姿误差 <i>e</i> 及其限幅积分 <i>I</i><sub>e</sub> 形成 PID 反馈，并用基座运动形成运动学前馈。令 <i>v</i><sub>e</sub> 为末端世界系速度在控制坐标系中的表示，<i>v</i><sub>b→e</sub> 和 <i>a</i><sub>b→e</sub> 为换算到末端的基座运动信号，则笛卡尔速度指令为</p>
     <div class="equation">
       <div class="expression"><math display="block" xmlns="http://www.w3.org/1998/Math/MathML">
@@ -125,15 +133,16 @@
         </mtable>
       </math></div><span class="number">(4)</span>
     </div>
-    <p>试验采用 Y 轴底座扰动，固定世界系目标与控制增益。首轮用 20 mm 峰值的正弦扰动，在 1、3、5 Hz 各做六组换序配对。在 50 Hz 底座状态更新率下比较惯量前馈关闭、静态换算和动态映射，再固定动态映射比较 50 与 200 Hz。扰动频率表示底座每秒往复的次数。末端传递率取末端与基座在该频率处的位移幅值比。</p>
-    <p>第二轮固定底座状态更新率为 200 Hz，在同一次启动中比较三种映射。除 3 Hz 和 5 Hz 单频复测外，叠加 0.5–8 Hz 内的 13 个正弦分量，合成指令位移的峰值为 20 mm<sup>[2]</sup>。六组使用不同相位组合，组内三种配置采用相同波形，遍历六种试次顺序。先按时间戳用最小二乘联合拟合各频率分量及线性漂移，再报告逐频传递率和整段去趋势位移的均方根（RMS）之比。</p>
-    <p>PID 调参固定 200 Hz 和动态惯性映射，只更改 Y 向比例与微分增益。先用两套 20 mm 多频波形筛选十组增益，再用独立相位的 20 mm 和 30 mm 波形各做六组配对验证。每次更换增益只重启外环 PID，重新下发同一个世界系目标。每段扰动前记录 2.5 s 的静止末端位置，用去趋势 RMS 检查抖动。</p>
-    <p>随后用同一组 20 mm 和 30 mm 多频波形复测两个问题。在 <code>init</code> 姿态和新 PID 下，仅通过是否送入解析加速度切换惯性前馈，两组均保留重力和科氏补偿。再在 SRDF 的取料起始姿态 <code>1st_reco_start</code> 固定动态惯性前馈，对照原 PID 和新 PID。两项复测均在 200 Hz 下按振幅各做六组换序配对。</p>
-    <p>加速度来源对照固定新 PID、200 Hz 和 <code>init</code> 姿态，比较原始指令加速度、按龙门速度环修正的指令加速度，以及实测基座速度的因果估算。实测估算用最近三个带时间戳的速度样本求导，再经 35 Hz 一阶低通。30 mm 多频扰动和平滑往返脉冲各做六组，组内遍历三种来源。多频误差去除拟合的慢漂移，脉冲误差参考脉冲前的平均位置。</p>
+    <h3>2.2　扰动与配对试验</h3>
+    <p>基准试验向 Y 轴施加峰值 20 mm 的正弦扰动，在 1、3、5 Hz 各做六组换序配对。先在 50 Hz 更新率下比较惯性前馈关闭、静态换算和动态映射，再固定动态映射比较 50 与 200 Hz。随后在 200 Hz 下复测三种映射，分别使用 3、5 Hz 单频和由 0.5–8 Hz 内 13 个正弦分量组成的多频波形<sup>[2]</sup>。配对组内扰动波形相同。</p>
+    <p>逐频传递率为末端位移幅值与实测底座位移幅值之比。按 ROS 时间戳用最小二乘联合拟合各正弦分量与线性漂移。多频段另报告去趋势的末端位移 RMS（均方根）、末端与底座的 RMS 比值，以及 13 个分量中最大的传递率。方括号表示配对差的 95% 置信区间，正改善量表示误差减小。</p>
+    <p>调参固定 200 Hz，每次仅更改被测轴的比例与微分增益。Y 向用两套 20 mm 波形筛选十组增益，再用独立波形在 20、30 mm 各做六组配对验证，并在取料起始姿态 <code>1st_reco_start</code> 复测。X、Z 向在 <code>init</code> 姿态使用龙门模型修正前馈，各筛选六组增益。对筛出的 X 向参数另做六组验证，复算三维位移与转角 RMS。每次只重启外环 PID，重新下发同一世界系目标，扰动前记录 2.5 s 静止位置。</p>
+    <p>新 Y 向增益下，在 <code>init</code> 姿态再做惯性前馈开关对照，两组均保留重力和科氏补偿。加速度来源试验采用 30 mm 多频与平滑往返脉冲，各做六组，比较原始指令、龙门模型修正和实测速度估算。实测方案用最近三个速度样本求导并经 35 Hz 一阶低通。脉冲误差以扰动前的平均末端位置为参考。</p>
   </section>
 
   <section aria-labelledby="results">
     <h2 id="results">3　结果<span lang="en">Results</span></h2>
+    <h3>3.1　惯性映射与底座状态更新率</h3>
     <div class="table-frame">
       <table>
         <caption>表 1　末端基频传递率（%，六组均值）</caption>
@@ -171,6 +180,7 @@
       <img src="img/inertia_mapping_200hz_multisine.png" width="2235" height="960" alt="黑白双栏图。三种配置的平均传递率均随频率上升。动态映射相对关闭的逐点置信区间均跨零。">
       <figcaption><strong>图 3.</strong> 200 Hz 基座状态下的多频对照。(a) 同一扰动同时包含 13 个频率分量，连线连接测量值。(b) 六组配对差与逐频 95% 置信区间，正值表示动态映射的传递率较低。8 Hz 处相对静态换算的区间为 0.64 至 5.35 个百分点，属于逐频探索结果。</figcaption>
     </figure>
+    <h3>3.2　Y 向 PID 与惯性前馈复测</h3>
     <div class="table-frame">
       <table>
         <caption>表 3　Y 向 PID 增益调整后的独立验证（200 Hz，六组均值）</caption>
@@ -192,6 +202,7 @@
       <img src="img/inertia_and_pid_pose_followup.png" width="2235" height="960" alt="左图为 init 姿态下新 PID 的惯性前馈开关对照，20 mm 工况的两个配对区间均高于零。右图为取料起始姿态的 PID 对照，两种振幅下的配对区间均高于零。">
       <figcaption><strong>图 5.</strong> 新 PID 下的惯性前馈开关对照，以及取料起始姿态的 PID 复测。灰点为六组配对差，误差棒为 95% 置信区间。正值表示开启惯性前馈或采用新 PID 后的传递率降低。</figcaption>
     </figure>
+    <h3>3.3　加速度来源对照</h3>
     <div class="table-frame">
       <table>
         <caption>表 4　30 mm 扰动下三种加速度来源的末端误差（mm，六组均值）</caption>
@@ -205,29 +216,48 @@
       </table>
     </div>
     <p>实测估算相对龙门模型修正的 RMS 配对改善为多频 0.030 [−0.170, 0.230] mm、脉冲 −0.009 [−0.074, 0.056] mm。两种工况下的 RMS 和峰值配对区间均跨零。36 段试验的惯性前馈在测量窗口内持续生效，未记录关节限速告警或力矩钳位。</p>
+    <h3 id="xz-results">3.4　X、Z 向调参与最终配置</h3>
+    <p>X 向六组验证的定向 RMS 由 1.316 降至 0.864 mm，配对改善 0.452 [0.385, 0.519] mm。最差频点传递率由 59.07% 降至 38.37%，配对改善 20.70 [17.97, 23.43] 个百分点。三维位移 RMS 由 1.337 降至 0.885 mm，转角 RMS 由 2.446 降至 1.534 mrad。</p>
+    <p>Z 向筛选中，原增益的最差频点传递率最低（17.57%）。例如 (12.0, 0.20) 把定向 RMS 从 0.842 降至 0.789 mm，同时把最差频点传递率抬至 22.89%。因此沿用 Z 向原值。X、Z 共 36 段试验的拟合窗口内惯性前馈持续生效，关节限速告警与力矩钳位计数均为零。</p>
+    <figure>
+      <img src="img/pid_xz_tuning.png" width="2235" height="960" alt="左图为 X 向调参前后的六组平均逐频传递率，右图为 Z 向六组增益的整体误差与最差频点对照，原增益的最差频点表现最好。">
+      <figcaption><strong>图 6.</strong> X、Z 向 20 mm 多频扰动对照。(a) X 向独立验证的六组均值。(b) Z 向筛选的两组均值，标注为 (<i>K</i><sub>p</sub>, <i>K</i><sub>d</sub>)，黑方块表示原增益。散点图的两个指标均以较低为佳。</figcaption>
+    </figure>
+    <div class="table-frame">
+      <table>
+        <caption>表 5　采用的平移轴反馈增益</caption>
+        <thead><tr><th scope="col">轴向</th><th scope="col"><i>K</i><sub>p</sub> (s<sup>−1</sup>)</th><th scope="col"><i>K</i><sub>d</sub></th><th scope="col">200 Hz 调参依据</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">X</th><td>12.0</td><td>0.35</td><td>20 mm，<code>init</code> 独立配对验证</td></tr>
+          <tr><th scope="row">Y</th><td>12.0</td><td>0.35</td><td>20、30 mm，两种姿态配对验证</td></tr>
+          <tr><th scope="row">Z</th><td>7.7</td><td>0.10</td><td>20 mm 筛选，保留原增益</td></tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 
   <section aria-labelledby="discussion">
     <h2 id="discussion">4　讨论<span lang="en">Discussion</span></h2>
-    <p>世界系反馈负责纠正位姿误差，动力学模型在关节层提供前馈补偿。导纳式动态映射能降低关节补偿峰值。原 PID 下的 200 Hz 试验尚未分辨出惯性前馈的额外抗扰收益。新 PID 下，20 mm 对照显示惯性支路可进一步降低末端误差。加快底座状态更新也带来了可重复的收益，该信号同时进入位姿反馈和运动学前馈。</p>
-    <p>在动力学前馈保持固定时，Y 向反馈调参在两种姿态下都将末端 RMS 降低约三成。惯性前馈在 <code>init</code> 姿态的 20 mm 工况下带来可测的额外收益，30 mm 工况仍有较大不确定性。结果适用于 Gazebo 中受 Y 向平移扰动的世界系定点任务。固定振幅时，所需的补偿加速度随频率平方增长，关节限速会约束高频、大振幅工况。</p>
-    <p>常用的 <code>with_moveit_new.launch</code> 现默认采用 200 Hz。50 Hz 与 200 Hz 均在该入口通过了无界面的 MoveIt → PID → MoveIt 验证。20 mm 单频启动检查中，3 Hz 末端传递率由 21.08% 降至 11.36%，5 Hz 由 46.62% 降至 20.40%，实时因子均接近 1。省略采样率参数的复测也实际测到 200 Hz，并完成了同样的控制交接。</p>
-    <p>30 mm 复测中，8 Hz 的实测基座加速度幅值比指令高约 15%，相位滞后 11.8°–12.7°。开启前馈后变差的第六组也在这个范围内。因此存在可测的高频输入偏差，目前证据无法将该组末端误差上升归因于这一偏差。</p>
-    <p>该偏差与行程（20 或 30 mm）和前馈开关无关，属龙门速度环的线性响应，可用一组固有频率与阻尼比（20.61 Hz、0.25）在全频带内拟合至 0.4% 与 0.4° 以内。扰动节点现将指令加速度经该模型后再发布，速度指令不变，故扰动本身与以上测量保持可比。按八个频点与基座实际运动对照，发布值的偏差在 8 Hz 为 1.3% 与 2.1°，5 Hz 及以下为 0.5% 与 1.6°，而同一次运行中未校正为 11.7% 与 14.3°。标定与验证两次运行测得的响应相差约 2 个百分点与 1.8°，所以单一常数模型只能对齐到百分之一的量级。</p>
+    <p>末端误差下降最明显、最稳定的两项措施是提高底座状态更新率，以及调节 X、Y 向 PID。更及时的底座信号同时用于位姿反馈和运动学前馈。导纳式动力学映射能降低关节补偿峰值，在新 PID 的 20 mm Y 向试验中还进一步降低了末端误差。30 mm 条件下的额外收益仍不确定。</p>
+    <p>30 mm 的 8 Hz 分量中，实测底座加速度比指令高约 15%、滞后 11.8°–12.7°。该差异在六组间相近，尚无法解释个别组的误差上升。用固有频率 20.61 Hz、阻尼比 0.25 的龙门速度环模型修正加速度后，独立验证中 8 Hz 的幅值偏差由 11.7% 降至 1.3%，相位偏差由 14.3° 降至 2.1°。修正改善了输入的准确性，三种加速度来源的末端误差差异仍在配对波动范围内。</p>
+    <p>验证范围是 Gazebo 中的单轴平移扰动与世界系定点保持。X、Z 向结果来自 <code>init</code> 姿态，Y 向调参另在取料起始姿态复现。当前惯性前馈使用已知龙门指令，外部冲击、底座旋转、末端轨迹跟踪和多轴同时扰动需要单独验证。</p>
+    <p><code>with_moveit_new.launch</code> 默认采用 200 Hz，且通过了无界面的 MoveIt → PID → MoveIt 验证。50 Hz 与 200 Hz 的启动检查中，20 mm、3 Hz 的末端传递率由 21.08% 降至 11.36%，5 Hz 由 46.62% 降至 20.40%。采用最终 X 向增益后，常用启动与交接再次通过。</p>
     <details>
       <summary>补充试验数据与复测设置</summary>
       <p>提频的配对改善量在 1、3、5 Hz 分别为 4.42 [3.64, 5.20]、17.33 [15.09, 19.57]、29.67 [24.42, 34.91] 个百分点，方括号是 95% 区间。主试验全程基座净移动约 56 mm。近零净位移的独立复测中，3 Hz 为 33.1% → 16.3%，5 Hz 为 62.6% → 29.3%，基座净移动 1.23 mm。</p>
       <p>10 mm 的单次摸底覆盖 0.5、2、4、6、8 Hz，其中 8 Hz 提频前后的传递率为 94.54% 和 45.17%。30 mm、5 Hz 下分别为 60.18% 和 32.73%。</p>
       <p>逐段记录位于 VM 的 <code>/tmp/ur5e-mapping-rate.kzPBo9/trials.csv</code>。复测时用 <code>base_pose_update_rate:=200.0</code> 调整基座频率，用 <code>inertia_mapping_experiment:=true</code> 启用映射切换。较早试验见<a href="../README.zh-CN.md">仓库记录</a>和<a href="img/inertial_feedforward_paired.png">惯量前馈配对图</a>。</p>
-      <p>200 Hz 映射对照的<a href="experiments/inertia_mapping_200hz/trials.csv">逐段统计</a>和<a href="experiments/inertia_mapping_200hz/responses.csv">逐频拟合结果</a>保存在仓库内，原始话题位于 VM 的 <code>/tmp/ur5e-inertia-200hz.xm0npn/results</code>。复试映射对照时，用 <code>UR5E_BENCH_PID_PARAMS</code> 指定调参前的 YAML（Y 向增益 7.7 和 0.10），再执行 <code>bash run.sh 新输出目录</code>。绘图用 <code>python3 analyze.py 数据目录 图像路径</code>。</p>
+      <p>复测时用 <code>UR5E_BENCH_PID_PARAMS</code> 指向试验当时的 <code>pid_params.yaml</code>。映射对照与原 Y 向调参使用提交 <code>a575538</code> 中的文件，新 Y 向增益下的对照使用 <code>12642d7</code> 中的文件。这几项历史试验还需设 <code>UR5E_BENCH_BASE_RESPONSE=off</code>，以复现当时的原始指令加速度。</p>
+      <p>200 Hz 映射对照的<a href="experiments/inertia_mapping_200hz/trials.csv">逐段统计</a>和<a href="experiments/inertia_mapping_200hz/responses.csv">逐频拟合结果</a>可用 <code>bash run.sh 新输出目录</code> 复试。绘图用 <code>python3 analyze.py 数据目录 图像路径</code>。原始话题位于 VM 的 <code>/tmp/ur5e-inertia-200hz.xm0npn/results</code>。</p>
       <p>200 Hz 试验中，开启组在拟合窗口内的惯量前馈有效比例为 99.6% 至 100%，力矩钳位计数为零。5 Hz 单频的两段记录了关节限速告警，其中一段告警出现在拟合窗口内。全试验基座净移动 6.60 mm。</p>
       <p>PID 调参的<a href="experiments/inertia_mapping_200hz/pid-gain-trials.csv">逐段统计</a>和<a href="experiments/inertia_mapping_200hz/pid-gain-responses.csv">逐频结果</a>包含筛选与独立验证。<code>bash run.sh 新输出目录 --tune</code> 可复试，绘图用 <code>python3 analyze_pid.py 数据目录 图像路径</code>。原始话题位于 VM 的 <code>/tmp/ur5e-pid-tuning.ptyNtZ/tuning</code>。</p>
-      <p>默认 50 Hz 采样率下，20 mm 多频扰动另做了四组配对复测。RMS 传递率由 31.42% 降至 24.81%，配对改善 6.61 [2.95, 10.27] 个百分点。最差频点的配对改善区间为 −5.55 至 25.83 个百分点。<a href="experiments/inertia_mapping_200hz/pid-gain-50hz-trials.csv">50 Hz 试次</a>及<a href="experiments/inertia_mapping_200hz/pid-gain-50hz-responses.csv">逐频结果</a>使用 <code>UR5E_BENCH_BASE_RATE=50.0 bash run.sh 新输出目录 --validate-gains 12.0 0.35</code> 复试。</p>
+      <p>设为 50 Hz 更新率时，20 mm 多频扰动另做了四组配对复测。RMS 传递率由 31.42% 降至 24.81%，配对改善 6.61 [2.95, 10.27] 个百分点。最差频点的配对区间为 −5.55 至 25.83 个百分点。<a href="experiments/inertia_mapping_200hz/pid-gain-50hz-trials.csv">50 Hz 试次</a>及<a href="experiments/inertia_mapping_200hz/pid-gain-50hz-responses.csv">逐频结果</a>可用 <code>UR5E_BENCH_BASE_RATE=50.0 bash run.sh 新输出目录 --validate-gains 12.0 0.35</code> 复试。</p>
       <p>新 PID 下惯性前馈开关的<a href="experiments/inertia_mapping_200hz/tuned-inertia-trials.csv">逐段统计</a>与<a href="experiments/inertia_mapping_200hz/tuned-inertia-responses.csv">逐频结果</a>可用 <code>bash run.sh 新输出目录 --compare-tuned-inertia</code> 复试。取料起始姿态的<a href="experiments/inertia_mapping_200hz/second-pose-gain-trials.csv">逐段统计</a>与<a href="experiments/inertia_mapping_200hz/second-pose-gain-responses.csv">逐频结果</a>可用 <code>bash run.sh 新输出目录 --pose 1st_reco_start --validate-gains 12.0 0.35 --full-validation</code> 复试。绘图用 <code>python3 analyze_followup.py 数据目录 图像路径</code>。原始话题位于 VM 的 <code>/tmp/ur5e-pid-inertia-followup.bpkZvB</code>。</p>
       <p>加速度对照用同一拟合窗口内的基座速度相量乘以 <i>jω</i>，再与按原始种子重建的解析指令加速度比较。对 30 mm 开启组的 8 Hz 分量，用位移相量乘以 −<i>ω</i><sup>2</sup> 交叉复算，两种估计的幅值相差不超过 0.12%，相位相差不超过 1.66°。<a href="experiments/inertia_mapping_200hz/base-acceleration-comparison.csv">逐频数据</a>可用 <code>python3 check_base_acceleration.py 原始base.csv 数据目录 输出.csv</code> 复算。</p>
       <p>基座响应校正的<a href="experiments/inertia_mapping_200hz/base-response-verification.csv">验证数据</a>可用 <code>bash run_verify.sh 新输出目录</code> 复测，该脚本在每个频点上将发布的加速度与基座速度相量乘 <i>jω</i> 对比，并以 <code>_base_response_frequency:=0</code> 的未校正运行作为对照。模型由 base-acceleration-comparison.csv 的 312 行数据拟合，涵盖两种行程与开关两种状态。</p>
-      <p>三种加速度来源的<a href="experiments/inertia_mapping_200hz/acceleration-source-trials.csv">配对试次</a>可用 <code>bash run.sh 新输出目录 --compare-acceleration-sources</code> 复测。<code>python3 analyze_acceleration_sources.py 原始记录目录 输出.csv</code> 从 ROS 位置话题重算峰值与 RMS。原始记录位于 VM 的 <code>/tmp/ur5e-accel-source.k2tWhu/source-verified</code>。</p>
-      <p>常用启动可用 <code>bash run_standard.sh 新输出目录 200</code> 复验。交还控制使用 <code>roslaunch sim_bringup init_pose_start_controllers.launch mode:=moveit</code>，由实测关节位置确认稳定后再规划。该命令已在正常启动流程中验证，从 PID 切回后成功执行 <code>1st_reco_start</code>。<a href="experiments/inertia_mapping_200hz/standard-bringup-smoke.csv">启动检查记录</a>含显式 50 Hz、显式 200 Hz 和默认 200 Hz 三次运行。</p>
+      <p>三种加速度来源的<a href="experiments/inertia_mapping_200hz/acceleration-source-trials.csv">配对试次</a>可用 <code>bash run.sh 新输出目录 --compare-acceleration-sources</code> 复测。<code>python3 analyze_acceleration_sources.py 原始记录目录 输出.csv</code> 可从 ROS 记录重算峰值与 RMS。原始话题位于 VM 的 <code>/tmp/ur5e-accel-source.k2tWhu/source-verified</code>。</p>
+      <p>加速度来源对照与 X、Z 调参复试使用提交 <code>43a8179</code> 中的 PID 文件，龙门模型修正保持启用。X 向的<a href="experiments/inertia_mapping_200hz/pid-gain-x-trials.csv">试次</a>与<a href="experiments/inertia_mapping_200hz/pid-gain-x-responses.csv">逐频数据</a>、Z 向的<a href="experiments/inertia_mapping_200hz/pid-gain-z-trials.csv">试次</a>与<a href="experiments/inertia_mapping_200hz/pid-gain-z-responses.csv">逐频数据</a>可用 <code>bash run.sh 新输出目录 --tune --axis x</code> 或 <code>--axis z</code> 复测。绘图用 <code>python3 analyze_axis_pid.py 数据目录 图像路径</code>。原始话题位于 VM 的 <code>/tmp/ur5e-pid-xz-tuning.F5lzOu</code>。</p>
+      <p>常用启动可用 <code>bash run_standard.sh 新输出目录 200</code> 复验。交还 MoveIt 使用 <code>roslaunch sim_bringup init_pose_start_controllers.launch mode:=moveit</code>，待实测关节位置稳定后再规划。<a href="experiments/inertia_mapping_200hz/standard-bringup-smoke.csv">采样率启动检查</a>与<a href="experiments/inertia_mapping_200hz/pid-x-deployed-smoke.csv">最终配置启动检查</a>附有扰动响应记录。</p>
     </details>
   </section>
 

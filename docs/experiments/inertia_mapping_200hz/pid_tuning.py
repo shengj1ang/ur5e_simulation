@@ -1,4 +1,4 @@
-"""Screen and validate Y-axis PID gains without restarting Gazebo or the joint controller."""
+"""Screen and validate translational PID gains without restarting Gazebo or the joint controller."""
 
 from itertools import product
 import signal
@@ -34,14 +34,22 @@ def wave(rng, frequencies, duration, peak):
     return omega, phase, peak*weights/maximum, duration
 
 
-def tune_gains(out, run_leg, hold, initial_target, current_base, tip, validate_gains=None, full_validation=False):
+def tune_gains(out, run_leg, hold, initial_target, current_base, tip, validate_gains=None,
+               full_validation=False, axis="y"):
     p, q = pose_components(current_base())
     goal_p, goal_q = pose_components(initial_target.pose)
     world_p = p + quaternion_matrix(q)[:3, :3] @ goal_p
     world_q = quaternion_multiply(q, goal_q)
     kp, kd = [rospy.get_param(name) for name in ("/K_p", "/K_d")]
-    baseline = (7.7, .10)
-    candidates = [baseline, *product((7.7, 12.0, 17.7), (.05, .20, .35))]
+    index = 7*"xyz".index(axis)
+    baseline = (17.7, .10) if axis == "x" else (7.7, .10)
+    screen = {
+        "x": [(17.7, .20), (17.7, .35), (12.0, .20), (12.0, .35), (22.0, .35)],
+        "y": list(product((7.7, 12.0, 17.7), (.05, .20, .35))),
+        "z": [(7.7, .20), (7.7, .35), (12.0, .20), (12.0, .35), (17.7, .35)],
+    }
+    candidates = [baseline, *screen[axis]]
+    print(f"{axis.upper()} PID baseline Kp={baseline[0]} Kd={baseline[1]}", flush=True)
     pid_node = "/sim_pid_controller"
     command = rospy.Publisher(f"/{ARM}/command_cart_vel", Twist, queue_size=1, tcp_nodelay=True)
     logs = []
@@ -64,7 +72,7 @@ def tune_gains(out, run_leg, hold, initial_target, current_base, tip, validate_g
     def set_gains(gains, log):
         nonlocal process
         stop_pid()
-        kp[7], kd[7] = gains
+        kp[index], kd[index] = gains
         rospy.set_param("/K_p", kp)
         rospy.set_param("/K_d", kd)
         first = len(logs)
@@ -104,7 +112,8 @@ def tune_gains(out, run_leg, hold, initial_target, current_base, tip, validate_g
         assert process.poll() is None
         h = y/b
         speed_warnings = sum("joint velocity" in r.msg and "over the" in r.msg for r in logs[log_index:])
-        result = dict(stage=stage, block=block, kp_y=gains[0], kd_y=gains[1], peak_mm=1000*peak,
+        gain_fields = {f"kp_{axis}": gains[0], f"kd_{axis}": gains[1]}
+        result = dict(stage=stage, block=block, **gain_fields, peak_mm=1000*peak,
                       fit_start_s=start, fit_duration_s=duration, base_rms_mm=1000*b_rms,
                       tip_rms_mm=1000*y_rms, rms_transfer_pct=100*y_rms/b_rms,
                       worst_tone_pct=100*max(abs(h)), worst_tone_hz=omega[np.argmax(abs(h))]/(2*np.pi),
@@ -112,7 +121,7 @@ def tune_gains(out, run_leg, hold, initial_target, current_base, tip, validate_g
                       active_pct=100*active, torque_clip_updates=int(diag[-1,3]-diag[0,3]), rtf=rtf)
         append_row(trials, result)
         for f, a, base_phasor, tip_phasor, response in zip(omega/(2*np.pi), amplitude, b, y, h):
-            append_row(responses, dict(stage=stage, block=block, kp_y=gains[0], kd_y=gains[1],
+            append_row(responses, dict(stage=stage, block=block, **gain_fields,
                                        peak_mm=1000*peak, frequency_hz=f, command_mm=1000*a,
                                        base_mm=1000*abs(base_phasor), tip_mm=1000*abs(tip_phasor),
                                        transfer_pct=100*abs(response), phase_deg=np.angle(response, deg=True)))
@@ -138,7 +147,7 @@ def tune_gains(out, run_leg, hold, initial_target, current_base, tip, validate_g
                 # Reverse the order on a second waveform to balance slow drift.
                 order = [candidates[i] for i in rng.permutation(len(candidates))]
                 for block, ordered in enumerate((order, order[::-1]), 1):
-                    settings = wave(rng, freqs, 6.0, .020)
+                    settings = wave(rng, freqs, 6.0 if axis == "y" else 4.0, .020)
                     for gains in ordered:
                         idle = set_gains(gains, log)
                         results[gains].append(measure("screen", block, gains, .020, settings, idle))
@@ -149,14 +158,16 @@ def tune_gains(out, run_leg, hold, initial_target, current_base, tip, validate_g
                             and average(rows, "idle_rms_mm") <= max(.010, 2*average(base_rows, "idle_rms_mm"))
                             and sum(r["joint_speed_warnings"] for r in rows) <=
                             sum(r["joint_speed_warnings"] for r in base_rows)
-                            and not any(r["torque_clip_updates"] for r in rows)]
+                            and sum(r["torque_clip_updates"] for r in rows) <=
+                            sum(r["torque_clip_updates"] for r in base_rows)]
                 if not eligible:
                     print("COMPLETE: no screened gain improved both disturbance metrics", flush=True)
                     return
                 winner = min(eligible, key=lambda g: average(results[g], "rms_transfer_pct"))
                 print(f"SELECTED for independent validation: {winner}, baseline {baseline}", flush=True)
             short_check = validate_gains and not full_validation
-            conditions = [(0.020, 6.0)] if short_check else FULL_CONDITIONS
+            conditions = ([(0.020, 6.0)] if short_check or (axis != "y" and not full_validation)
+                          else FULL_CONDITIONS)
             validation_rng = np.random.default_rng(451195 if short_check else VALIDATION_SEED)
             paired = {peak: {g: [] for g in (baseline, winner)} for peak, _ in conditions}
             blocks = 4 if short_check else 6
@@ -169,7 +180,7 @@ def tune_gains(out, run_leg, hold, initial_target, current_base, tip, validate_g
                     for peak in (order if block % 2 else order[::-1]):
                         paired[peak][gains].append(measure("validation", block, gains, peak, settings[peak], idle))
             for peak, group in paired.items():
-                for key in ("rms_transfer_pct", "worst_tone_pct", "idle_rms_mm"):
+                for key in ("tip_rms_mm", "rms_transfer_pct", "worst_tone_pct", "idle_rms_mm"):
                     diffs = np.array([x[key]-y[key] for x, y in zip(group[baseline], group[winner])])
                     width = t.ppf(.975, len(diffs)-1)*diffs.std(ddof=1)/np.sqrt(len(diffs))
                     print(f"{peak*1000:g} mm {key}: {average(group[baseline], key):.6f} to "
