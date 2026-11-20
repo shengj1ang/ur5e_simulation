@@ -437,10 +437,12 @@ roslaunch sim_bringup gantry_disturbance.launch axis:=y amplitude:=0.02 frequenc
 `inertia_feedforward`。独立笛卡尔和导纳链路沿用插件默认值 false。按 4.3 节启动笛卡尔
 控制器和 PID，令它在世界系保持目标，外环的三个速度导纳矩阵保持为零。
 
-`inertia_feedforward_profiles` 按实测关节姿态和基座扰动轴选取标定。`init` 启用 X、Y、Z，
-取料起始姿态 `1st_reco_start` 启用 Y。`project_translation` 中的轴先将等效关节偏置投影到
-扰动方向的末端平移，再折算回关节力矩。离开标定工况时，惯性偏置逐渐衰减。
-[末端位姿开关对照](docs/inertial_feedforward_report.html#calibrated-inertia)
+`inertia_feedforward_gain` 按 `base_link` 的三根轴各给一个权重，与机械臂姿态无关。
+`inertia_project_translation` 中的轴先将等效关节偏置投影到扰动方向的末端平移，再折算回
+关节力矩。`inertia_alignment_threshold` 是单轴域的边界，取基座加速度与其最大分量夹角的
+余弦平方，低于它关闭修正，高于它淡入至单轴的满权重。两个姿态的三个平移轴都有收益，只有
+`init` 的 Y 向持平。
+[末端位姿开关对照](docs/inertial_feedforward_report.html#per-axis-weights)
 
 龙门的 X、Y、Z 轴扰动会在 `/gantry/base_linear_acceleration` 发布带仿真时间戳的
 `geometry_msgs/Vector3Stamped`，单位 m/s²，坐标系为 `base_link`。它由龙门速度指令解析求导得到，

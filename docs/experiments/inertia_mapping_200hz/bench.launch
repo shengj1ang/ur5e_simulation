@@ -23,8 +23,6 @@
   </include>
   <param name="sim_cartesian_velocity_controller_sim/inertia_feedforward_gain" type="double"
          value="$(arg inertia_feedforward_gain)" if="$(eval arg('inertia_feedforward_gain') != '')"/>
-  <rosparam param="sim_cartesian_velocity_controller_sim/inertia_feedforward_poses"
-            if="$(eval arg('inertia_feedforward_gain') != '')">[]</rosparam>
   <param name="sim_cartesian_velocity_controller_sim/inertia_project_translation" type="bool"
          value="$(arg inertia_project_translation)" if="$(eval arg('inertia_feedforward_gain') != '')"/>
 </launch>

@@ -175,14 +175,7 @@ private:
     bool project_translation;
   };
 
-  struct InertiaCalibration
-  {
-    std::vector<double> joints;
-    std::vector<double> gains;
-    std::array<bool, 3> project_translation{{false, false, false}};
-  };
-
-  bool loadInertiaCalibration(ros::NodeHandle& n);
+  bool loadInertiaWeights(ros::NodeHandle& n);
   InertiaCompensation inertiaCompensation(const KDL::Vector& acceleration) const;
   void baseAccelerationCallback(const geometry_msgs::Vector3StampedConstPtr& msg);
   void staticInertiaMappingCallback(const std_msgs::BoolConstPtr& msg);
@@ -209,11 +202,10 @@ private:
   ros::Time started_at_;
   std::string root_name_;
   bool inertia_feedforward_enabled_ = false;
-  double inertia_feedforward_gain_ = 1.0;
-  bool inertia_project_translation_ = false;
-  double inertia_calibration_radius_ = 0.2;
-  double inertia_calibration_fade_radius_ = 0.3;
-  std::vector<InertiaCalibration> inertia_calibrations_;
+  // One weight and one translation-projection flag per base_link axis.
+  std::array<double, 3> inertia_feedforward_gain_{{1.0, 1.0, 1.0}};
+  std::array<bool, 3> inertia_project_translation_{{false, false, false}};
+  double inertia_alignment_threshold_ = 0.64;
   std::vector<double> joint_proportional_gain_;
   std::vector<double> joint_damping_;
   KDL::JntArray inertial_offset_;

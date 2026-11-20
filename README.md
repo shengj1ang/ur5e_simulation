@@ -512,12 +512,15 @@ standalone Cartesian and admittance configurations use the plugin default of
 false. Start the Cartesian controller and PID as in §4.3 and hold a world-fixed
 target with the three outer velocity admittance matrices at zero.
 
-`inertia_feedforward_profiles` selects the correction by measured arm pose and
-base disturbance axis. It covers X, Y and Z near `init` and Y near
-`1st_reco_start`. Axes listed in `project_translation` project the equivalent
-joint offset onto tool translation along the disturbance before converting it
-back to joint torque. The correction fades out away from the calibrated conditions.
-[Paired tool pose results](docs/inertial_feedforward_report.html#calibrated-inertia)
+`inertia_feedforward_gain` carries one weight per `base_link` axis and does not
+depend on the arm's pose. Axes listed in `inertia_project_translation` project the
+equivalent joint offset onto tool translation along the disturbance before
+converting it back to joint torque. `inertia_alignment_threshold` is where the
+single-axis domain ends, as the squared cosine between the base acceleration and
+its largest component, and the correction fades in from there to full weight on
+one axis. Both poses' three translation axes gain from it except `init`'s Y, which
+is a wash.
+[Paired tool pose results](docs/inertial_feedforward_report.html#per-axis-weights)
 
 For X, Y and Z disturbances, the gantry node publishes the analytic derivative
 of its velocity command, including the ramps, on

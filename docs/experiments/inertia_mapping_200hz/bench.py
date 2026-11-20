@@ -113,6 +113,22 @@ def main(out, args):
     tip_world = []
     base_pose = None
     axis = "xyz".index(args.axis)
+    # The disturbance direction, in gantry axes. A cross axis drives a second
+    # one with the same waveform, which takes the base acceleration out of the
+    # single-axis domain the inertia weights were identified in and so out of
+    # the controller's alignment gate. unit is that direction normalised, for
+    # projecting the base and tip traces onto it; scale is how much longer the
+    # combined stroke is than one axis', which the amplitude check carries.
+    weights = np.zeros(3)
+    weights[axis] = 1.0
+    if args.cross_axis:
+        name, colon, fraction = args.cross_axis.partition(":")
+        assert colon and len(name) == 1 and name in "xyz" and name != args.axis, args.cross_axis
+        value = float(fraction)
+        assert np.isfinite(value) and value != 0.0, args.cross_axis
+        weights["xyz".index(name)] = value
+    scale = float(np.linalg.norm(weights))
+    unit = weights / scale
     measured_acceleration = None
     if args.compare_acceleration_sources:
         from acceleration_sources import VelocityAcceleration
@@ -121,7 +137,8 @@ def main(out, args):
     def read_base(msg):
         nonlocal base_pose, measured_acceleration
         base_pose = msg.pose.pose
-        base.append((msg.header.stamp.to_sec(), getattr(base_pose.position, args.axis)))
+        place = base_pose.position
+        base.append((msg.header.stamp.to_sec(), float(unit @ (place.x, place.y, place.z))))
         if args.compare_acceleration_sources:
             value = estimator.update(msg.header.stamp.to_sec(), msg.twist.twist.linear.y)
             measured_acceleration = (msg.header.stamp, value, base_pose.orientation) if value is not None else None
@@ -129,7 +146,7 @@ def main(out, args):
     def read_tip(msg):
         stamp = msg.header.stamp.to_sec()
         position, orientation = msg.pose.pose.position, msg.pose.pose.orientation
-        tip.append((stamp, getattr(position, args.axis)))
+        tip.append((stamp, float(unit @ (position.x, position.y, position.z))))
         if phase_balanced:
             tip_world.append((stamp, position.x, position.y, position.z, orientation.x,
                               orientation.y, orientation.z, orientation.w))
@@ -186,7 +203,8 @@ def main(out, args):
     if phase_balanced:
         assert tip_world, "No world-frame tool pose received before starting the trials"
         tip_reference = np.array(tip_world[-1][1:])
-    print(f"READY: native {configured_rate:g} Hz p3d, SRDF pose {args.pose}, {args.axis.upper()} disturbance", flush=True)
+    disturbance = args.axis.upper() + (f"+{args.cross_axis.upper()}" if args.cross_axis else "")
+    print(f"READY: native {configured_rate:g} Hz p3d, SRDF pose {args.pose}, {disturbance} disturbance", flush=True)
 
     def pose_metrics(begin, duration):
         trace = np.asarray(tip_world)
@@ -248,7 +266,7 @@ def main(out, args):
             else:
                 velocity, acc = pulse(t-FIT_DELAY)
             gantry_velocity = [0.0]*4
-            gantry_velocity[axis] = velocity
+            gantry_velocity[:3] = (weights * velocity).tolist()
             command.publish(Float64MultiArray(data=gantry_velocity))
             if mode != "off" or keep_acceleration:
                 stamp, q = now, base_pose.orientation
@@ -264,7 +282,7 @@ def main(out, args):
                     last_t = t
                 msg = Vector3Stamped()
                 msg.header.stamp, msg.header.frame_id = stamp, "base_link"
-                direction_in_base = quaternion_matrix([q.x, q.y, q.z, q.w])[axis, :3]
+                direction_in_base = weights @ quaternion_matrix([q.x, q.y, q.z, q.w])[:3, :3]
                 msg.vector.x, msg.vector.y, msg.vector.z = acc * direction_in_base
                 acceleration.publish(msg)
             rate.sleep()
@@ -281,8 +299,9 @@ def main(out, args):
         active = np.mean(diag[:, 1])
         assert active == 0 if mode == "off" else active > .4, (profile, mode, active)
         low, high = (.65, 1.35) if axis == 1 else (.35, 1.80)
-        assert np.all((low*amplitude <= abs(p_base)) & (abs(p_base) <= high*amplitude)), (
-            profile, mode, abs(p_base)/amplitude)
+        expected = scale * amplitude          # the projected stroke, not one axis'
+        assert np.all((low*expected <= abs(p_base)) & (abs(p_base) <= high*expected)), (
+            profile, mode, abs(p_base)/expected)
         return begin, p_base, p_tip, base_rms, tip_rms, base_rate, active, diag, rtf
 
     if args.compare_acceleration_sources:
@@ -296,13 +315,15 @@ def main(out, args):
         compare_tuned_inertia(out, run_leg, null=args.inertia_null,
                               phase_balanced=args.inertia_phase_balanced,
                               pose_metrics=pose_metrics, seed=args.inertia_seed,
-                              peak_mm=args.inertia_peak, axis=args.axis)
+                              peak_mm=args.inertia_peak, axis=args.axis,
+                              cross_axis=args.cross_axis)
         return
 
     if args.inertia_factorial_gain is not None:
         from inertia_followup import compare_inertia_factors
         compare_inertia_factors(out, run_leg, pose_metrics, args.pose, args.axis,
-                                args.inertia_factorial_gain, args.inertia_seed, args.inertia_peak)
+                                args.inertia_factorial_gain, args.inertia_seed, args.inertia_peak,
+                                cross_axis=args.cross_axis)
         return
 
     if args.tune or args.validate_gains:
@@ -351,6 +372,10 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     parser.add_argument("--pose", default="init", help="SRDF manipulator group state")
     parser.add_argument("--axis", choices=("x", "y", "z"), default="y", help="Base translation axis")
+    parser.add_argument("--cross-axis", default="", metavar="AXIS:FRACTION",
+                        help="drive a second base axis with the same waveform at this "
+                             "fraction of the primary amplitude, e.g. y:0.5. The recorded "
+                             "gains are the primary axis'")
     parser.add_argument("--full-validation", action="store_true", help="Check both 20 mm and 30 mm in six paired blocks")
     parser.add_argument("--inertia-phase-balanced", action="store_true",
                         help="Match the disturbance sample phase within each inertia block")
@@ -375,4 +400,6 @@ if __name__ == "__main__":
         parser.error("Inertia phase, seed and peak options require an inertia comparison")
     if args.axis != "y" and not (args.tune or args.validate_gains or args.inertia_phase_balanced or factorial):
         parser.error("--axis x/z requires PID gain testing or a phase-balanced inertia comparison")
+    if args.cross_axis and not (args.inertia_phase_balanced or factorial):
+        parser.error("--cross-axis requires a phase-balanced inertia comparison")
     main(args.output, args)

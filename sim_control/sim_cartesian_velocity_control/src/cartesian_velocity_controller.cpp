@@ -454,14 +454,7 @@ bool CartesianVelocityControllerSim::init(hardware_interface::PositionJointInter
   if (!enable_inertia)
     return true;
 
-  n.param("inertia_feedforward_gain", inertia_feedforward_gain_, 1.0);
-  n.param("inertia_project_translation", inertia_project_translation_, false);
-  if (!std::isfinite(inertia_feedforward_gain_))
-  {
-    ROS_ERROR("inertia_feedforward_gain must be finite");
-    return false;
-  }
-  if (!loadInertiaCalibration(n))
+  if (!loadInertiaWeights(n))
     return false;
 
   std::string topic;
@@ -543,59 +536,94 @@ bool CartesianVelocityControllerSim::init(hardware_interface::PositionJointInter
   }
 
   inertia_feedforward_enabled_ = true;
-  ROS_INFO("Cartesian velocity controller: translational inertia feedforward listens on %s (gain %.3g)",
-           topic.c_str(), inertia_feedforward_gain_);
+  ROS_INFO("Cartesian velocity controller: translational inertia feedforward listens on %s "
+           "(weights %.3g %.3g %.3g, projected on %d%d%d)",
+           topic.c_str(), inertia_feedforward_gain_[0], inertia_feedforward_gain_[1],
+           inertia_feedforward_gain_[2], inertia_project_translation_[0],
+           inertia_project_translation_[1], inertia_project_translation_[2]);
   return true;
 }
 
-bool CartesianVelocityControllerSim::loadInertiaCalibration(ros::NodeHandle& n)
+bool CartesianVelocityControllerSim::loadInertiaWeights(ros::NodeHandle& n)
 {
-  std::vector<std::string> poses;
-  if (!n.hasParam("inertia_feedforward_poses"))
-    return true;
-  if (!n.getParam("inertia_feedforward_poses", poses))
+  const auto numeric = [](const XmlRpc::XmlRpcValue& value) {
+    return value.getType() == XmlRpc::XmlRpcValue::TypeInt ||
+           value.getType() == XmlRpc::XmlRpcValue::TypeDouble;
+  };
+  const auto number = [](XmlRpc::XmlRpcValue& value) {
+    return value.getType() == XmlRpc::XmlRpcValue::TypeInt ? double(int(value)) : double(value);
+  };
+
+  // One weight per base_link translation axis, or a single number for all
+  // three. The weights are identified in closed loop, one base axis at a time;
+  // a zero leaves that direction to the feedback and the kinematic feedforward.
+  XmlRpc::XmlRpcValue gain;
+  if (n.getParam("inertia_feedforward_gain", gain))
   {
-    ROS_ERROR("inertia_feedforward_poses must be a list of profile names");
+    if (numeric(gain))
+      inertia_feedforward_gain_.fill(number(gain));
+    else if (gain.getType() == XmlRpc::XmlRpcValue::TypeArray && gain.size() == 3 &&
+             numeric(gain[0]) && numeric(gain[1]) && numeric(gain[2]))
+    {
+      for (int i = 0; i < 3; ++i)
+        inertia_feedforward_gain_[i] = number(gain[i]);
+    }
+    else
+    {
+      ROS_ERROR("inertia_feedforward_gain takes one number per axis, or one for all three");
+      return false;
+    }
+  }
+  if (!std::all_of(inertia_feedforward_gain_.begin(), inertia_feedforward_gain_.end(),
+                   [](double value) { return std::isfinite(value); }))
+  {
+    ROS_ERROR("inertia_feedforward_gain must be finite");
     return false;
   }
 
-  n.param("inertia_calibration_radius", inertia_calibration_radius_, 0.2);
-  n.param("inertia_calibration_fade_radius", inertia_calibration_fade_radius_, 0.3);
-  if (!std::isfinite(inertia_calibration_radius_) || !std::isfinite(inertia_calibration_fade_radius_) ||
-      inertia_calibration_radius_ < 0.0 || inertia_calibration_fade_radius_ <= inertia_calibration_radius_)
+  // Where the single-axis domain ends, as the squared cosine between the base
+  // acceleration and its largest component: 0.64 is 37 degrees. Below it the
+  // correction is off, above it it fades in. Measured at init with the X weight
+  // against a Y cross axis, the deployed weight still beat leaving it at zero
+  // by 8.6 % of the three-dimensional RMS at 26.6 degrees and cost 5.3 % at
+  // 45 degrees, so the crossing interpolates to 37. Zero never shuts the
+  // correction off, since the largest component of a vector carries at least a
+  // third of its square.
+  n.param("inertia_alignment_threshold", inertia_alignment_threshold_, 0.64);
+  if (!std::isfinite(inertia_alignment_threshold_) || inertia_alignment_threshold_ < 0.0 ||
+      inertia_alignment_threshold_ >= 1.0)
   {
-    ROS_ERROR("Inertia calibration requires 0 <= radius < fade radius");
+    ROS_ERROR("inertia_alignment_threshold must be in [0, 1)");
     return false;
   }
-  const auto finite = [](double value) { return std::isfinite(value); };
-  for (const auto& name : poses)
+
+  // The axes whose correction keeps only the along-disturbance translation,
+  // or a bool for all three.
+  XmlRpc::XmlRpcValue project;
+  if (n.getParam("inertia_project_translation", project))
   {
-    const std::string prefix = "inertia_feedforward_profiles/" + name;
-    InertiaCalibration profile;
-    if (!n.getParam(prefix + "/joints", profile.joints) || profile.joints.size() != joint_handles_.size() ||
-        !n.getParam(prefix + "/gains", profile.gains) || profile.gains.size() != 3 ||
-        !std::all_of(profile.joints.begin(), profile.joints.end(), finite) ||
-        !std::all_of(profile.gains.begin(), profile.gains.end(), finite))
+    if (project.getType() == XmlRpc::XmlRpcValue::TypeBoolean)
+      inertia_project_translation_.fill(bool(project));
+    else if (project.getType() == XmlRpc::XmlRpcValue::TypeArray)
     {
-      ROS_ERROR("Inertia profile %s requires finite joint positions and three XYZ gains", name.c_str());
-      return false;
-    }
-    std::vector<std::string> axes;
-    if (n.hasParam(prefix + "/project_translation") && !n.getParam(prefix + "/project_translation", axes))
-    {
-      ROS_ERROR("Inertia profile %s requires a list of axes for project_translation", name.c_str());
-      return false;
-    }
-    for (const auto& axis : axes)
-    {
-      if (axis.size() != 1 || axis[0] < 'x' || axis[0] > 'z')
+      inertia_project_translation_.fill(false);
+      for (int i = 0; i < project.size(); ++i)
       {
-        ROS_ERROR("Invalid projection axis in inertia profile %s", name.c_str());
-        return false;
+        const std::string axis = project[i].getType() == XmlRpc::XmlRpcValue::TypeString ?
+                                 std::string(project[i]) : std::string();
+        if (axis.size() != 1 || axis[0] < 'x' || axis[0] > 'z')
+        {
+          ROS_ERROR("inertia_project_translation takes the axis names x, y and z");
+          return false;
+        }
+        inertia_project_translation_[axis[0] - 'x'] = true;
       }
-      profile.project_translation[axis[0] - 'x'] = true;
     }
-    inertia_calibrations_.push_back(std::move(profile));
+    else
+    {
+      ROS_ERROR("inertia_project_translation takes a list of axes, or a bool for all three");
+      return false;
+    }
   }
   return true;
 }
@@ -603,9 +631,6 @@ bool CartesianVelocityControllerSim::loadInertiaCalibration(ros::NodeHandle& n)
 CartesianVelocityControllerSim::InertiaCompensation
 CartesianVelocityControllerSim::inertiaCompensation(const KDL::Vector& acceleration) const
 {
-  if (inertia_calibrations_.empty())
-    return {inertia_feedforward_gain_, inertia_project_translation_};
-
   const double magnitude_sq = KDL::dot(acceleration, acceleration);
   if (magnitude_sq < 1e-12)
     return {0.0, false};
@@ -614,31 +639,15 @@ CartesianVelocityControllerSim::inertiaCompensation(const KDL::Vector& accelerat
     if (std::abs(acceleration(i)) > std::abs(acceleration(axis)))
       axis = i;
   const double alignment = acceleration(axis) * acceleration(axis) / magnitude_sq;
-  if (alignment <= 0.9)
+  if (alignment <= inertia_alignment_threshold_)
     return {0.0, false};
 
-  const InertiaCalibration* nearest = nullptr;
-  double distance = inertia_calibration_fade_radius_;
-  for (const auto& profile : inertia_calibrations_)
-  {
-    double error = 0.0;
-    for (std::size_t i = 0; i < profile.joints.size(); ++i)
-      error = std::max(error, std::abs(std::remainder(joint_msr_.q(i) - profile.joints[i], 2.0 * M_PI)));
-    if (error < distance)
-    {
-      nearest = &profile;
-      distance = error;
-    }
-  }
-  if (!nearest)
-    return {0.0, false};
-
-  // The calibration is local in joint space and was identified along one
-  // base axis at a time. Fade out the correction away from that domain.
-  const double pose_weight = std::min(1.0, (inertia_calibration_fade_radius_ - distance) /
-                                             (inertia_calibration_fade_radius_ - inertia_calibration_radius_));
-  const double weight = pose_weight * (alignment - 0.9) / 0.1;
-  return {weight * nearest->gains[axis], nearest->project_translation[axis]};
+  // The weights were identified along one base axis at a time, so fade the
+  // correction out as the disturbance leaves that domain. A pure single-axis
+  // disturbance leaves the factor at one and the weight as configured.
+  const double weight = (alignment - inertia_alignment_threshold_) /
+                        (1.0 - inertia_alignment_threshold_);
+  return {weight * inertia_feedforward_gain_[axis], inertia_project_translation_[axis]};
 }
 
 void CartesianVelocityControllerSim::starting(const ros::Time& time)

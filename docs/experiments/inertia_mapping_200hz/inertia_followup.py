@@ -11,7 +11,8 @@ from bench import ARM, JOINTS, PROFILES, append_row
 from pid_tuning import FULL_CONDITIONS, VALIDATION_SEED, wave
 
 
-def compare_tuned_inertia(out, run_leg, *, null, phase_balanced, pose_metrics, seed, peak_mm, axis):
+def compare_tuned_inertia(out, run_leg, *, null, phase_balanced, pose_metrics, seed, peak_mm, axis,
+                          cross_axis=""):
     index = 7 * "xyz".index(axis)
     kp, kd = (rospy.get_param(name)[index] for name in ("/K_p", "/K_d"))
     if not phase_balanced:
@@ -47,6 +48,8 @@ def compare_tuned_inertia(out, run_leg, *, null, phase_balanced, pose_metrics, s
                     h = y / b
                     key = dict(block=block, leg=leg, mode=mode, peak_mm=peak*1000)
                     key.update({f"kp_{axis}": kp, f"kd_{axis}": kd})
+                    if cross_axis:
+                        key["cross_axis"] = cross_axis
                     if phase_balanced:
                         key["phase_slot_ms"] = slot
                     pose = pose_metrics(start, duration) if phase_balanced else {}
@@ -67,7 +70,8 @@ def compare_tuned_inertia(out, run_leg, *, null, phase_balanced, pose_metrics, s
     print(f"COMPLETE: {2*len(conditions)*blocks} {name} trials", flush=True)
 
 
-def compare_inertia_factors(out, run_leg, pose_metrics, pose, axis, magnitude, seed, peak_mm):
+def compare_inertia_factors(out, run_leg, pose_metrics, pose, axis, magnitude, seed, peak_mm,
+                            cross_axis=""):
     assert rospy.get_param("/mapping_bench_base_rate") == 200.0
     seed = VALIDATION_SEED if seed is None else seed
     peak_mm = 20 if peak_mm is None else peak_mm
@@ -132,7 +136,8 @@ def compare_inertia_factors(out, run_leg, pose_metrics, pose, axis, magnitude, s
                     max_request_error_nm=max((abs(requested - gain*mapped) for m in samples for mapped, requested
                                               in zip(m.mapped_torque, m.requested_torque)), default=0.0))
                 response = tip/base
-                key = dict(pose=pose, axis=axis, seed=seed, peak_mm=peak_mm, block=block, leg=leg,
+                key = dict(pose=pose, axis=axis, cross_axis=cross_axis, seed=seed,
+                           peak_mm=peak_mm, block=block, leg=leg,
                            trial_id=trial_id, gain=gain, project_translation=int(project), phase_slot_ms=block-1)
                 warnings = sum("joint velocity" in r.msg and "over the" in r.msg for r in logs[log_start:])
                 append_row(trials, dict(**key, fit_start_s=start, fit_duration_s=duration,

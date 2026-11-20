@@ -60,21 +60,30 @@ sim_cartesian_velocity_controller_sim:
   # The standalone Cartesian and admittance configurations use the plugin default (false).
   inertia_feedforward: true
   # Closed-loop calibration for single-axis base translation while holding a
-  # world target. Joint vectors follow the arm chain from shoulder to wrist.
-  # Gains are in base_link X/Y/Z. A zero leaves that direction to feedback and
-  # the kinematic feedforward. Fade the dynamic correction outside each pose band.
-  inertia_feedforward_poses: [init, 1st_reco_start]
-  inertia_calibration_radius: 0.20
-  inertia_calibration_fade_radius: 0.30
-  inertia_feedforward_profiles:
-    init:
-      joints: [0.0, -1.57, 1.57, 0.0, 1.57, 1.57]
-      gains: [-2.0, 2.0, 1.0]
-      project_translation: [x]
-    1st_reco_start:
-      joints: [0.0, -1.0, 1.0, -1.57, -1.57, 0.0]
-      gains: [0.0, -0.75, 0.0]
-      project_translation: [y]
+  # world target. One weight per base_link axis, X/Y/Z; a zero leaves that
+  # direction to the feedback and the kinematic feedforward.
+  #
+  # The weights no longer depend on the arm's pose. Y carries the picking start
+  # pose's -0.75 rather than init's +2, because the two poses want opposite
+  # signs there and the cost is one-sided: -0.75 raises init's Y displacement
+  # RMS by 1.2 to 1.5 % while keeping the picking pose's 25 to 27 % reduction,
+  # where +2 raises the picking pose's by 133 %. Dropping the pose table also
+  # turns X and Z on at the picking pose, where the table's zeros gave up a
+  # 3.6 to 6.1 % reduction on X and a 43.3 % one on Z. Measured against the
+  # table at the two calibrated poses, a plain constant reproduces the applied
+  # joint offset to within 1 %.
+  #
+  # project_translation lists the axes whose correction keeps only the
+  # along-disturbance translation, dropping the cross-axis and rotational parts.
+  inertia_feedforward_gain: [-2.0, -0.75, 1.0]
+  inertia_project_translation: [x, y]
+  # Where the single-axis domain ends, as the squared cosine between the base
+  # acceleration and its largest component. 0.64 is 37 degrees, which is where
+  # the deployed weight stops beating no correction at all: measured at init
+  # with the X weight against a Y cross axis, it won by 8.6 % of the
+  # three-dimensional RMS at 26.6 degrees and lost 5.3 % at 45. The correction
+  # fades in from there to full weight on a single axis.
+  inertia_alignment_threshold: 0.64
   publish_rate: 125
   root_name: base_link
   tip_name: ee_link
