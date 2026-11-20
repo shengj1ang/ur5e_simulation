@@ -437,12 +437,12 @@ roslaunch sim_bringup gantry_disturbance.launch axis:=y amplitude:=0.02 frequenc
 `inertia_feedforward`。独立笛卡尔和导纳链路沿用插件默认值 false。按 4.3 节启动笛卡尔
 控制器和 PID，令它在世界系保持目标，外环的三个速度导纳矩阵保持为零。
 
-`inertia_feedforward_gain` 按 `base_link` 的三根轴各给一个权重，与机械臂姿态无关。
-`inertia_project_translation` 中的轴先将等效关节偏置投影到扰动方向的末端平移，再折算回
-关节力矩。力矩按基座轴分解后各乘各的权重，
-偏离单轴的扰动不再被主导轴的权重修正。`inertia_alignment_threshold` 在余弦平方低于它时
-关闭修正，默认 0 即永不触发，调高则退回单轴域。两个姿态的三个平移轴都有收益，只有 `init`
-的 Y 向持平；偏离单轴到 45 度仍有收益。
+`inertia_feedforward_gain` 按 `base_link` 的三根轴各给一个权重，与机械臂姿态无关。力矩
+按轴分解，每一份各乘各的权重，偏离单轴的扰动因此不再被主导轴的权重修正。
+`inertia_project_translation` 中的轴只保留该轴方向的末端平移，丢掉横向与转动部分。
+`inertia_alignment_threshold` 取基座加速度与其最大分量夹角的余弦平方，低于它就关闭修正；
+默认 0 永不触发，调高则退回单轴域。两个姿态的三个平移轴都有收益，只有 `init` 的 Y 向
+持平；偏离单轴到 45 度同样有收益。
 [末端位姿开关对照](docs/inertial_feedforward_report.html#per-axis-weights)
 
 龙门的 X、Y、Z 轴扰动会在 `/gantry/base_linear_acceleration` 发布带仿真时间戳的

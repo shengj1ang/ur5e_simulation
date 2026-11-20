@@ -513,15 +513,16 @@ false. Start the Cartesian controller and PID as in §4.3 and hold a world-fixed
 target with the three outer velocity admittance matrices at zero.
 
 `inertia_feedforward_gain` carries one weight per `base_link` axis and does not
-depend on the arm's pose. Axes listed in `inertia_project_translation` project the
-equivalent joint offset onto tool translation along the disturbance before
-converting it back to joint torque. The torque is split per base axis and each
-share carries its own weight, so a disturbance off a single axis is not corrected
-with whichever weight belongs to its largest component.
-`inertia_alignment_threshold` switches the correction off below that squared
-cosine; it is 0 and never fires, and raising it falls back to the single-axis
-domain. Both poses' three translation axes gain from this except `init`'s Y, which
-is a wash, and so do two-axis disturbances out to 45 degrees.
+depend on the arm's pose. The torque is split per axis and each share carries its
+own weight, so a disturbance off a single axis is not corrected with whichever
+weight belongs to its largest component. Axes listed in
+`inertia_project_translation` keep only their own translation in that share,
+dropping the cross-axis and rotational parts. `inertia_alignment_threshold`
+switches the correction off when the squared cosine between the base acceleration
+and its largest component falls below it; at 0 it never fires, and raising it
+falls back to the single-axis domain. Both poses' three translation axes gain from
+this except `init`'s Y, which is a wash, and so do two-axis disturbances out to
+45 degrees.
 [Paired tool pose results](docs/inertial_feedforward_report.html#per-axis-weights)
 
 For X, Y and Z disturbances, the gantry node publishes the analytic derivative
