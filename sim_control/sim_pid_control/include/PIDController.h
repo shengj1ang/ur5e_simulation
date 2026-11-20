@@ -120,6 +120,8 @@ protected:
   // loop_rate_.expectedCycleTime() is not the age of any of the signals.
   ros::Time last_control_time_;
   ros::Time last_base_state_time_;
+  ros::Time last_arm_state_time_;
+  ros::Publisher pub_sample_age_;
   // Longest gap still treated as continuous; a larger one means a stalled or
   // restarted publisher, and the derivative is dropped instead of spiking.
   double max_input_gap_;

@@ -15,6 +15,10 @@ launch_args=("base_pose_update_rate:=${UR5E_BENCH_BASE_RATE:-200.0}")
 if [[ -n ${UR5E_BENCH_PID_PARAMS:-} ]]; then
     launch_args+=("pid_params_file:=$UR5E_BENCH_PID_PARAMS")
 fi
+if [[ -n ${UR5E_BENCH_INERTIA_GAIN:-} ]]; then
+    launch_args+=("inertia_feedforward_gain:=$UR5E_BENCH_INERTIA_GAIN")
+    launch_args+=("inertia_project_translation:=${UR5E_BENCH_INERTIA_PROJECT:-false}")
+fi
 roslaunch "$bench_dir/bench.launch" "${launch_args[@]}" >"$output_dir/launch.log" 2>&1 &
 processes=($!)
 trap 'kill -INT "${processes[@]}" 2>/dev/null || true; wait || true' EXIT
@@ -28,6 +32,10 @@ done
 topics=(/base_pose_ground_truth /ee_pose_ground_truth
         /sim_cartesian_velocity_controller_sim/inertial_feedforward_state)
 names=(base ee inertia)
+if [[ ${UR5E_BENCH_RECORD_TIMING:-0} == 1 ]]; then
+    topics+=(/pid_control/sample_age)
+    names+=(pid-sample-age)
+fi
 for i in "${!topics[@]}"; do
     rostopic echo -p "${topics[$i]}" >"$output_dir/${names[$i]}.csv" 2>"$output_dir/${names[$i]}.log" &
     processes+=($!)

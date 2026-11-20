@@ -512,6 +512,13 @@ standalone Cartesian and admittance configurations use the plugin default of
 false. Start the Cartesian controller and PID as in §4.3 and hold a world-fixed
 target with the three outer velocity admittance matrices at zero.
 
+`inertia_feedforward_profiles` selects the correction by measured arm pose and
+base disturbance axis. It covers X, Y and Z near `init` and Y near
+`1st_reco_start`. Axes listed in `project_translation` project the equivalent
+joint offset onto tool translation along the disturbance before converting it
+back to joint torque. The correction fades out away from the calibrated conditions.
+[Paired tool pose results](docs/inertial_feedforward_report.html#calibrated-inertia)
+
 For X, Y and Z disturbances, the gantry node publishes the analytic derivative
 of its velocity command, including the ramps, on
 `/gantry/base_linear_acceleration`. It is a simulation-time stamped

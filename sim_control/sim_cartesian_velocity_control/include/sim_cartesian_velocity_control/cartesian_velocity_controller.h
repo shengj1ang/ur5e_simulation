@@ -18,6 +18,7 @@
 #include <kdl/chainfksolvervel_recursive.hpp>
 #include <kdl/chainfksolverpos_recursive.hpp>
 #include <kdl/chainjnttojacdotsolver.hpp>
+#include <kdl/chainjnttojacsolver.hpp>
 #include "sim_cartesian_velocity_control/kinematic_chain_controller_base.h"
 #include <realtime_tools/realtime_buffer.h>
 #include <realtime_tools/realtime_publisher.h>
@@ -167,9 +168,24 @@ public:
   void starting(const ros::Time& time) override;
 
 private:
+  struct InertiaCompensation
+  {
+    double gain;
+    bool project_translation;
+  };
+
+  struct InertiaCalibration
+  {
+    std::vector<double> joints;
+    std::vector<double> gains;
+    std::array<bool, 3> project_translation{{false, false, false}};
+  };
+
+  bool loadInertiaCalibration(ros::NodeHandle& n);
+  InertiaCompensation inertiaCompensation(const KDL::Vector& acceleration) const;
   void baseAccelerationCallback(const geometry_msgs::Vector3StampedConstPtr& msg);
   void staticInertiaMappingCallback(const std_msgs::BoolConstPtr& msg);
-  bool computeInertialTorque(const KDL::Vector& base_acceleration);
+  bool computeInertialTorque(const KDL::Vector& base_acceleration, bool project_translation);
 
   /**
    * Write velocity commands through a position interface
@@ -188,14 +204,22 @@ private:
   ros::Time started_at_;
   std::string root_name_;
   bool inertia_feedforward_enabled_ = false;
+  double inertia_feedforward_gain_ = 1.0;
+  bool inertia_project_translation_ = false;
+  double inertia_calibration_radius_ = 0.2;
+  double inertia_calibration_fade_radius_ = 0.3;
+  std::vector<InertiaCalibration> inertia_calibrations_;
   std::vector<double> joint_proportional_gain_;
   std::vector<double> joint_damping_;
   KDL::JntArray inertial_offset_;
   KDL::JntArray reference_acceleration_;
+  KDL::JntArray projected_offset_;
   KDL::JntArray translation_torque_;
   KDL::JntArray inertial_torque_;
   KDL::JntSpaceInertiaMatrix arm_inertia_;
   std::unique_ptr<KDL::ChainJntToJacDotSolver> jacobian_dot_;
+  std::unique_ptr<KDL::ChainJntToJacSolver> inertia_jacobian_solver_;
+  KDL::Jacobian inertia_jacobian_;
   std::array<std::unique_ptr<KDL::ChainDynParam>, 3> unit_acceleration_models_;
   std::unique_ptr<realtime_tools::RealtimePublisher<
       sim_cartesian_velocity_control::InertialFeedforwardState>> inertia_state_pub_;

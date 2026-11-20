@@ -1,4 +1,5 @@
 #include "PIDController.h"
+#include <geometry_msgs/Vector3Stamped.h>
 
 PIDController::PIDController(ros::NodeHandle &n,
                              double frequency,
@@ -55,6 +56,7 @@ PIDController::PIDController(ros::NodeHandle &n,
   // Publishers
   pub_arm_cmd_ = nh_.advertise<geometry_msgs::Twist>(topic_arm_command, 1);
   pub_feedback_ = nh_.advertise<geometry_msgs::Twist>("/check", 1);
+  pub_sample_age_ = nh_.advertise<geometry_msgs::Vector3Stamped>("/pid_control/sample_age", 10);
 
   // Init integrator
   arm_desired_twist_final_.setZero();
@@ -160,6 +162,7 @@ PIDController::PIDController(ros::NodeHandle &n,
 ///////////////////////////////////////////////////////////////
 void PIDController::state_arm_callback(const nav_msgs::OdometryConstPtr msg)
 {
+  last_arm_state_time_ = msg->header.stamp;
   arm_real_position_ << msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z;
 
   arm_real_orientation_.coeffs() << msg->pose.pose.orientation.x,
@@ -398,6 +401,18 @@ void PIDController::run()
 
       // Copy commands to messages
       send_commands_to_robot();
+
+      if (pub_sample_age_.getNumSubscribers() && !last_base_state_time_.isZero() &&
+          !last_arm_state_time_.isZero())
+      {
+        // x: base sample age, y: arm sample age, z: PID period, all in seconds.
+        geometry_msgs::Vector3Stamped sample_age;
+        sample_age.header.stamp = now;
+        sample_age.vector.x = (now - last_base_state_time_).toSec();
+        sample_age.vector.y = (now - last_arm_state_time_).toSec();
+        sample_age.vector.z = dt;
+        pub_sample_age_.publish(sample_age);
+      }
 
       // publishing visualization/debugging info
       //    publish_debuggings_signals();

@@ -109,6 +109,7 @@ def main(out, args):
     assert rospy.get_param(f"/{ARM}/inertia_mapping_experiment") is True
     configured_rate = rospy.get_param("/mapping_bench_base_rate")
     base, tip, inertia = [], [], []
+    tip_world = []
     base_pose = None
     axis = "xyz".index(args.axis)
     measured_acceleration = None
@@ -125,7 +126,12 @@ def main(out, args):
             measured_acceleration = (msg.header.stamp, value, base_pose.orientation) if value is not None else None
 
     def read_tip(msg):
-        tip.append((msg.header.stamp.to_sec(), getattr(msg.pose.pose.position, args.axis)))
+        stamp = msg.header.stamp.to_sec()
+        position, orientation = msg.pose.pose.position, msg.pose.pose.orientation
+        tip.append((stamp, getattr(position, args.axis)))
+        if args.inertia_phase_balanced:
+            tip_world.append((stamp, position.x, position.y, position.z, orientation.x,
+                              orientation.y, orientation.z, orientation.w))
 
     def read_inertia(msg):
         inertia.append((msg.header.stamp.to_sec(), msg.active, msg.static_mapping,
@@ -176,7 +182,25 @@ def main(out, args):
     target.header.frame_id = "pid"
     hold.publish(target)
     rospy.sleep(1.5)
+    if args.inertia_phase_balanced:
+        assert tip_world, "No world-frame tool pose received before starting the trials"
+        tip_reference = np.array(tip_world[-1][1:])
     print(f"READY: native {configured_rate:g} Hz p3d, SRDF pose {args.pose}, {args.axis.upper()} disturbance", flush=True)
+
+    def pose_metrics(begin, duration):
+        trace = np.asarray(tip_world)
+        trace = trace[(trace[:, 0] >= begin) & (trace[:, 0] < begin + duration)]
+        time = trace[:, 0] - begin
+        displacement = np.linalg.norm(trace[:, 1:4] - tip_reference[:3], axis=1)
+        rotations = trace[:, 4:]
+        reference = tip_reference[3:]
+        cosine = abs(rotations @ reference) / (np.linalg.norm(rotations, axis=1) *
+                                                np.linalg.norm(reference))
+        angle = 2 * np.arccos(np.clip(cosine, 0, 1))
+        errors = np.column_stack((displacement, angle))
+        rms = 1000 * np.sqrt(np.trapz(errors**2, time, axis=0) / (time[-1] - time[0]))
+        return dict(tip_xyz_rms_mm=rms[0], tip_xyz_peak_mm=1000*max(displacement),
+                    tip_orientation_rms_mrad=rms[1], tip_orientation_peak_mrad=1000*max(angle))
 
     def select(mode):
         use_static = mode == "static"
@@ -187,13 +211,23 @@ def main(out, args):
             rospy.sleep(.025)
         raise RuntimeError(f"Stationary mapping switch to {mode} did not complete")
 
-    def run_leg(profile, block, mode, omega, phase, amplitude, duration, source=None, pulse=None):
+    def run_leg(profile, block, mode, omega, phase, amplitude, duration,
+                source=None, pulse=None, phase_slot=None):
         select(mode)
         indices = tuple(map(len, (base, tip, inertia)))
         steady_end = FIT_DELAY + duration + .1
         start = rospy.Time.now()
+        if phase_slot is not None:
+            # Repeat the phase of the 200 Hz disturbance relative to the 1 ms
+            # physics step, 200 Hz base publisher, 125 Hz arm publisher and 250 Hz PID.
+            frame_ns = 40_000_000
+            first_tick = (start.to_nsec() // frame_ns + 1) * frame_ns + phase_slot * 1_000_000
+            start = rospy.Time(0, first_tick)
+            rospy.sleep(start - rospy.Time.now())
         start_wall = time.monotonic()
         rate = rospy.Rate(200)
+        if phase_slot is not None:
+            rate.last_time = start
         response = base_response() if base_response and source in (None, "model") else None
         last_t = None
         last_sample = None
@@ -256,9 +290,12 @@ def main(out, args):
         compare_sources(out, run_leg, base, tip)
         return
 
-    if args.compare_tuned_inertia:
+    if args.compare_tuned_inertia or args.inertia_null:
         from inertia_followup import compare_tuned_inertia
-        compare_tuned_inertia(out, run_leg)
+        compare_tuned_inertia(out, run_leg, null=args.inertia_null,
+                              phase_balanced=args.inertia_phase_balanced,
+                              pose_metrics=pose_metrics, seed=args.inertia_seed,
+                              peak_mm=args.inertia_peak, axis=args.axis)
         return
 
     if args.tune or args.validate_gains:
@@ -306,14 +343,24 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
     parser.add_argument("--pose", default="init", help="SRDF manipulator group state")
-    parser.add_argument("--axis", choices=("x", "y", "z"), default="y", help="Translation axis for PID tuning")
+    parser.add_argument("--axis", choices=("x", "y", "z"), default="y", help="Base translation axis")
     parser.add_argument("--full-validation", action="store_true", help="Check both 20 mm and 30 mm in six paired blocks")
+    parser.add_argument("--inertia-phase-balanced", action="store_true",
+                        help="Match the disturbance sample phase within each inertia block")
+    parser.add_argument("--inertia-seed", type=int, help="Seed for independent inertia comparison waveforms")
+    parser.add_argument("--inertia-peak", type=int, choices=(20, 30),
+                        help="Repeat only one disturbance peak in an inertia comparison (mm)")
     suite = parser.add_mutually_exclusive_group()
     suite.add_argument("--tune", action="store_true")
     suite.add_argument("--validate-gains", type=float, nargs=2, metavar=("KP", "KD"))
     suite.add_argument("--compare-tuned-inertia", action="store_true")
+    suite.add_argument("--inertia-null", action="store_true",
+                       help="Repeat disturbances with inertial feedforward off to measure repeatability")
     suite.add_argument("--compare-acceleration-sources", action="store_true")
     args = parser.parse_args()
-    if args.axis != "y" and not (args.tune or args.validate_gains):
-        parser.error("--axis x/z requires --tune or --validate-gains")
+    inertia_comparison = args.inertia_null or args.compare_tuned_inertia
+    if (args.inertia_phase_balanced or args.inertia_seed is not None or args.inertia_peak) and not inertia_comparison:
+        parser.error("Inertia phase, seed and peak options require an inertia comparison")
+    if args.axis != "y" and not (args.tune or args.validate_gains or args.inertia_phase_balanced):
+        parser.error("--axis x/z requires PID gain testing or a phase-balanced inertia comparison")
     main(args.output, args)

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace controller_interface
@@ -453,6 +454,16 @@ bool CartesianVelocityControllerSim::init(hardware_interface::PositionJointInter
   if (!enable_inertia)
     return true;
 
+  n.param("inertia_feedforward_gain", inertia_feedforward_gain_, 1.0);
+  n.param("inertia_project_translation", inertia_project_translation_, false);
+  if (!std::isfinite(inertia_feedforward_gain_))
+  {
+    ROS_ERROR("inertia_feedforward_gain must be finite");
+    return false;
+  }
+  if (!loadInertiaCalibration(n))
+    return false;
+
   std::string topic;
   n.param<std::string>("base_acceleration_topic", topic, "/gantry/base_linear_acceleration");
   if (topic.empty())
@@ -483,10 +494,13 @@ bool CartesianVelocityControllerSim::init(hardware_interface::PositionJointInter
   const unsigned int joints = kdl_chain_.getNrOfJoints();
   inertial_offset_.resize(joints);
   reference_acceleration_.resize(joints);
+  projected_offset_.resize(joints);
   translation_torque_.resize(joints);
   inertial_torque_.resize(joints);
   arm_inertia_.resize(joints);
   jacobian_dot_.reset(new KDL::ChainJntToJacDotSolver(kdl_chain_));
+  inertia_jacobian_solver_.reset(new KDL::ChainJntToJacSolver(kdl_chain_));
+  inertia_jacobian_.resize(joints);
   for (unsigned int axis = 0; axis < unit_acceleration_models_.size(); ++axis)
   {
     KDL::Vector apparent_gravity = KDL::Vector::Zero();
@@ -517,8 +531,102 @@ bool CartesianVelocityControllerSim::init(hardware_interface::PositionJointInter
         this, ros::TransportHints().tcpNoDelay());
 
   inertia_feedforward_enabled_ = true;
-  ROS_INFO("Cartesian velocity controller: translational inertia feedforward listens on %s", topic.c_str());
+  ROS_INFO("Cartesian velocity controller: translational inertia feedforward listens on %s (gain %.3g)",
+           topic.c_str(), inertia_feedforward_gain_);
   return true;
+}
+
+bool CartesianVelocityControllerSim::loadInertiaCalibration(ros::NodeHandle& n)
+{
+  std::vector<std::string> poses;
+  if (!n.hasParam("inertia_feedforward_poses"))
+    return true;
+  if (!n.getParam("inertia_feedforward_poses", poses))
+  {
+    ROS_ERROR("inertia_feedforward_poses must be a list of profile names");
+    return false;
+  }
+
+  n.param("inertia_calibration_radius", inertia_calibration_radius_, 0.2);
+  n.param("inertia_calibration_fade_radius", inertia_calibration_fade_radius_, 0.3);
+  if (!std::isfinite(inertia_calibration_radius_) || !std::isfinite(inertia_calibration_fade_radius_) ||
+      inertia_calibration_radius_ < 0.0 || inertia_calibration_fade_radius_ <= inertia_calibration_radius_)
+  {
+    ROS_ERROR("Inertia calibration requires 0 <= radius < fade radius");
+    return false;
+  }
+  const auto finite = [](double value) { return std::isfinite(value); };
+  for (const auto& name : poses)
+  {
+    const std::string prefix = "inertia_feedforward_profiles/" + name;
+    InertiaCalibration profile;
+    if (!n.getParam(prefix + "/joints", profile.joints) || profile.joints.size() != joint_handles_.size() ||
+        !n.getParam(prefix + "/gains", profile.gains) || profile.gains.size() != 3 ||
+        !std::all_of(profile.joints.begin(), profile.joints.end(), finite) ||
+        !std::all_of(profile.gains.begin(), profile.gains.end(), finite))
+    {
+      ROS_ERROR("Inertia profile %s requires finite joint positions and three XYZ gains", name.c_str());
+      return false;
+    }
+    std::vector<std::string> axes;
+    if (n.hasParam(prefix + "/project_translation") && !n.getParam(prefix + "/project_translation", axes))
+    {
+      ROS_ERROR("Inertia profile %s requires a list of axes for project_translation", name.c_str());
+      return false;
+    }
+    for (const auto& axis : axes)
+    {
+      if (axis.size() != 1 || axis[0] < 'x' || axis[0] > 'z')
+      {
+        ROS_ERROR("Invalid projection axis in inertia profile %s", name.c_str());
+        return false;
+      }
+      profile.project_translation[axis[0] - 'x'] = true;
+    }
+    inertia_calibrations_.push_back(std::move(profile));
+  }
+  return true;
+}
+
+CartesianVelocityControllerSim::InertiaCompensation
+CartesianVelocityControllerSim::inertiaCompensation(const KDL::Vector& acceleration) const
+{
+  if (inertia_calibrations_.empty())
+    return {inertia_feedforward_gain_, inertia_project_translation_};
+
+  const double magnitude_sq = KDL::dot(acceleration, acceleration);
+  if (magnitude_sq < 1e-12)
+    return {0.0, false};
+  unsigned int axis = 0;
+  for (unsigned int i = 1; i < 3; ++i)
+    if (std::abs(acceleration(i)) > std::abs(acceleration(axis)))
+      axis = i;
+  const double alignment = acceleration(axis) * acceleration(axis) / magnitude_sq;
+  if (alignment <= 0.9)
+    return {0.0, false};
+
+  const InertiaCalibration* nearest = nullptr;
+  double distance = inertia_calibration_fade_radius_;
+  for (const auto& profile : inertia_calibrations_)
+  {
+    double error = 0.0;
+    for (std::size_t i = 0; i < profile.joints.size(); ++i)
+      error = std::max(error, std::abs(std::remainder(joint_msr_.q(i) - profile.joints[i], 2.0 * M_PI)));
+    if (error < distance)
+    {
+      nearest = &profile;
+      distance = error;
+    }
+  }
+  if (!nearest)
+    return {0.0, false};
+
+  // The calibration is local in joint space and was identified along one
+  // base axis at a time. Fade out the correction away from that domain.
+  const double pose_weight = std::min(1.0, (inertia_calibration_fade_radius_ - distance) /
+                                             (inertia_calibration_fade_radius_ - inertia_calibration_radius_));
+  const double weight = pose_weight * (alignment - 0.9) / 0.1;
+  return {weight * nearest->gains[axis], nearest->project_translation[axis]};
 }
 
 void CartesianVelocityControllerSim::starting(const ros::Time& time)
@@ -551,7 +659,8 @@ void CartesianVelocityControllerSim::staticInertiaMappingCallback(const std_msgs
   static_mapping_requested_.writeFromNonRT(msg->data);
 }
 
-bool CartesianVelocityControllerSim::computeInertialTorque(const KDL::Vector& base_acceleration)
+bool CartesianVelocityControllerSim::computeInertialTorque(const KDL::Vector& base_acceleration,
+                                                            bool project_translation)
 {
   // For a world-fixed tip and a translating root, J*qdd + Jdot*qdot = -a_base.
   const KDL::Twist task_acceleration(-base_acceleration, KDL::Vector::Zero());
@@ -572,6 +681,23 @@ bool CartesianVelocityControllerSim::computeInertialTorque(const KDL::Vector& ba
     if (unit_acceleration_models_[axis]->JntToGravity(joint_msr_.q, translation_torque_) != 0)
       return false;
     inertial_torque_.data += base_acceleration(axis) * translation_torque_.data;
+  }
+  if (project_translation)
+  {
+    const double length = base_acceleration.Norm();
+    if (length < 1e-6 || inertia_jacobian_solver_->JntToJac(joint_msr_.q, inertia_jacobian_) != 0)
+      return false;
+    const KDL::Vector direction = base_acceleration / length;
+    KDL::Vector displacement = KDL::Vector::Zero();
+    for (std::size_t i = 0; i < joint_proportional_gain_.size(); ++i)
+      displacement += inertia_jacobian_.getColumn(i).vel * (inertial_torque_(i) / joint_proportional_gain_[i]);
+    // Project the servo's equivalent position offset along the disturbance.
+    // Keep the nominal orientation and cross-axis position out of this feedforward.
+    const KDL::Twist projected(direction * KDL::dot(direction, displacement), KDL::Vector::Zero());
+    if (ik_vel_solver_->CartToJnt(joint_msr_.q, projected, projected_offset_) != 0)
+      return false;
+    for (std::size_t i = 0; i < joint_proportional_gain_.size(); ++i)
+      inertial_torque_(i) = joint_proportional_gain_[i] * projected_offset_(i);
   }
   return inertial_torque_.data.allFinite();
 }
@@ -623,8 +749,10 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
   const auto* input = inertia_feedforward_enabled_ ? base_acceleration_.readFromRT() : nullptr;
   const bool fresh_input = input && !input->stamp.isZero() && input->stamp >= started_at_ &&
                            input->stamp <= time && (time - input->stamp).toSec() <= 0.05;
+  const auto compensation = fresh_input ? inertiaCompensation(input->linear) : InertiaCompensation{0.0, false};
   const bool compensate_inertia = fresh_input && dt > 0.0 && reference_unconstrained_ &&
-                                  computeInertialTorque(input->linear);
+                                  compensation.gain != 0.0 &&
+                                  computeInertialTorque(input->linear, compensation.project_translation);
   const bool static_requested = inertia_mapping_experiment_ && *static_mapping_requested_.readFromRT();
   // Switch between trials, after the last sample has expired and the offset
   // has decayed. Switching during a disturbance would kick the servo's D term.
@@ -684,7 +812,7 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
       // Both mappings bound the position offset to 25 mrad.
       const double torque_limit = p * 0.025;
       const double model_torque = compensate_inertia ? inertial_torque_(i) : 0.0;
-      const double requested_torque = lead_limited ? 0.0 : model_torque;
+      const double requested_torque = lead_limited ? 0.0 : compensation.gain * model_torque;
       const double torque = std::max(-torque_limit, std::min(torque_limit, requested_torque));
       if (torque != requested_torque)
       {

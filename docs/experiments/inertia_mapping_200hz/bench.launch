@@ -1,6 +1,8 @@
 <launch>
   <arg name="base_pose_update_rate" default="200.0"/>
   <arg name="pid_params_file" default="$(find sim_pid_control)/config/pid_params.yaml"/>
+  <arg name="inertia_feedforward_gain" default=""/>
+  <arg name="inertia_project_translation" default="false"/>
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="world_name" value="$(find sim_gazebo)/world/one_brick.world"/>
     <arg name="gui" value="false"/>
@@ -19,4 +21,10 @@
     <arg name="inertia_mapping_experiment" value="true"/>
     <arg name="PID_PARAMS_FILE" value="$(arg pid_params_file)"/>
   </include>
+  <param name="sim_cartesian_velocity_controller_sim/inertia_feedforward_gain" type="double"
+         value="$(arg inertia_feedforward_gain)" if="$(eval arg('inertia_feedforward_gain') != '')"/>
+  <rosparam param="sim_cartesian_velocity_controller_sim/inertia_feedforward_poses"
+            if="$(eval arg('inertia_feedforward_gain') != '')">[]</rosparam>
+  <param name="sim_cartesian_velocity_controller_sim/inertia_project_translation" type="bool"
+         value="$(arg inertia_project_translation)" if="$(eval arg('inertia_feedforward_gain') != '')"/>
 </launch>

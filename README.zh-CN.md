@@ -437,6 +437,11 @@ roslaunch sim_bringup gantry_disturbance.launch axis:=y amplitude:=0.02 frequenc
 `inertia_feedforward`。独立笛卡尔和导纳链路沿用插件默认值 false。按 4.3 节启动笛卡尔
 控制器和 PID，令它在世界系保持目标，外环的三个速度导纳矩阵保持为零。
 
+`inertia_feedforward_profiles` 按实测关节姿态和基座扰动轴选取标定。`init` 启用 X、Y、Z，
+取料起始姿态 `1st_reco_start` 启用 Y。`project_translation` 中的轴先将等效关节偏置投影到
+扰动方向的末端平移，再折算回关节力矩。离开标定工况时，惯性偏置逐渐衰减。
+[末端位姿开关对照](docs/inertial_feedforward_report.html#calibrated-inertia)
+
 龙门的 X、Y、Z 轴扰动会在 `/gantry/base_linear_acceleration` 发布带仿真时间戳的
 `geometry_msgs/Vector3Stamped`，单位 m/s²，坐标系为 `base_link`。它由龙门速度指令解析求导得到，
 包含升降沿。其他加速度源可以使用同一个接口，或通过 `base_acceleration_topic` 指定话题。
