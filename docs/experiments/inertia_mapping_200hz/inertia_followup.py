@@ -71,7 +71,7 @@ def compare_tuned_inertia(out, run_leg, *, null, phase_balanced, pose_metrics, s
 
 
 def compare_inertia_factors(out, run_leg, pose_metrics, pose, axis, magnitude, seed, peak_mm,
-                            cross_axis=""):
+                            cross_axis="", pose_fraction=None):
     assert rospy.get_param("/mapping_bench_base_rate") == 200.0
     seed = VALIDATION_SEED if seed is None else seed
     peak_mm = 20 if peak_mm is None else peak_mm
@@ -139,6 +139,8 @@ def compare_inertia_factors(out, run_leg, pose_metrics, pose, axis, magnitude, s
                 key = dict(pose=pose, axis=axis, cross_axis=cross_axis, seed=seed,
                            peak_mm=peak_mm, block=block, leg=leg,
                            trial_id=trial_id, gain=gain, project_translation=int(project), phase_slot_ms=block-1)
+                if pose_fraction is not None:
+                    key["pose_fraction"] = pose_fraction
                 warnings = sum("joint velocity" in r.msg and "over the" in r.msg for r in logs[log_start:])
                 append_row(trials, dict(**key, fit_start_s=start, fit_duration_s=duration,
                                         base_rms_mm=1000*base_rms, tip_rms_mm=1000*tip_rms,

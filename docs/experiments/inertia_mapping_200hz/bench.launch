@@ -1,5 +1,6 @@
 <launch>
   <arg name="base_pose_update_rate" default="200.0"/>
+  <arg name="model" default="$(find sim_description)/urdf/xacro/main.xacro"/>
   <arg name="pid_params_file" default="$(find sim_pid_control)/config/pid_params.yaml"/>
   <arg name="inertia_feedforward_gain" default=""/>
   <arg name="inertia_project_translation" default="false"/>
@@ -10,7 +11,7 @@
     <arg name="headless" value="true"/>
     <arg name="use_sim_time" value="true"/>
   </include>
-  <param name="robot_description" command="$(find xacro)/xacro '$(find sim_description)/urdf/xacro/main.xacro' base_pose_update_rate:=$(arg base_pose_update_rate)"/>
+  <param name="robot_description" command="$(find xacro)/xacro '$(arg model)' base_pose_update_rate:=$(arg base_pose_update_rate)"/>
   <param name="mapping_bench_base_rate" type="double" value="$(arg base_pose_update_rate)"/>
   <rosparam file="$(find sim_bringup)/config/gazebo_joint_pid_gains.yaml" command="load"/>
   <rosparam file="$(find sim_bringup)/config/gantry_velocity_controller.yaml" command="load"/>

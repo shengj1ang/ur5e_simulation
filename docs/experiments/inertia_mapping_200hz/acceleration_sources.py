@@ -6,6 +6,7 @@ from itertools import permutations
 import numpy as np
 import rospy
 from rosgraph_msgs.msg import Log
+from tf.transformations import quaternion_matrix
 
 from bench import PROFILES, append_row
 from pid_tuning import wave
@@ -42,6 +43,37 @@ class VelocityAcceleration:
         derivative = slope + dt/(dt+old_dt)*(slope-old_slope)
         self.output += -math.expm1(-2*math.pi*35*dt)*(derivative-self.output)
         return self.output
+
+
+class BaseImuAcceleration:
+    """Filter the Gazebo link-acceleration signal along the bench axis."""
+
+    def __init__(self, axis):
+        self.axis = axis
+        self.stamp = None
+        self.output = 0.0
+
+    def update(self, msg):
+        q = msg.orientation
+        force = msg.linear_acceleration
+        orientation = (q.x, q.y, q.z, q.w)
+        reported_acceleration = (force.x, force.y, force.z)
+        if (msg.header.frame_id != "plate" or not np.isfinite(orientation + reported_acceleration).all()
+                or np.linalg.norm(orientation) < 0.5):
+            return None
+        stamp = msg.header.stamp
+        if self.stamp is not None and stamp <= self.stamp:
+            return None
+        # The legacy plugin differentiates world velocity and applies RotateVector before publishing.
+        world_acceleration = quaternion_matrix(orientation)[:3, :3].T @ reported_acceleration
+        component = float(self.axis @ world_acceleration)
+        dt = (stamp - self.stamp).to_sec() if self.stamp is not None else 0
+        if 0 < dt <= .02:
+            self.output += -math.expm1(-2*math.pi*35*dt)*(component-self.output)
+        else:
+            self.output = component
+        self.stamp = stamp
+        return stamp, self.output, q
 
 
 def displacement_pulse(amplitude, rise, dwell):
@@ -94,3 +126,51 @@ def compare_sources(out, run_leg, base, tip):
                     print(f"{profile} {block}/6 {source}: RMS {row['tip_rms_mm']:.3f} mm, "
                           f"peak {tip_peak:.3f} mm, active {100*active:.1f}%, caps {warnings}", flush=True)
     print("COMPLETE: 36 paired acceleration source trials", flush=True)
+
+def compare_sensor_inputs(out, run_leg, pose_metrics, base, seed, peak_mm):
+    """Compare sensor-only inertia against a matched hidden-command baseline."""
+    seed = 631047 if seed is None else seed
+    peak_mm = 30 if peak_mm is None else peak_mm
+    rng = np.random.default_rng(seed)
+    frequencies = PROFILES["multisine"][0]
+    multisine_duration = 8.0 if peak_mm == 20 else 4.0
+    sources = ("off", "model", "measured", "imu")
+    first_order = rng.permutation(sources)
+    logs = []
+    log_subscription = rospy.Subscriber("/rosout_agg", Log, logs.append, queue_size=100)
+    with (out/"sensor-input-trials.csv").open("w", newline="") as trials, \
+         (out/"sensor-input-responses.csv").open("w", newline="") as responses:
+        for block in range(1, 6):
+            multisine = wave(rng, frequencies, multisine_duration, peak_mm/1000)
+            pulse = displacement_pulse(peak_mm/1000 * (-1)**(block-1),
+                                       .17 + .017*(block-1), .28)
+            conditions = [("multisine", multisine, None),
+                          ("pulse", (np.empty(0), np.empty(0), np.empty(0), 2.5), pulse)]
+            for profile, settings, event in (conditions if block % 2 else conditions[::-1]):
+                for leg, source in enumerate(np.roll(first_order, block-1), 1):
+                    log_index = len(logs)
+                    # Only the command-model leg receives analytic command acceleration.
+                    # The sensor legs receive values reconstructed by measurement callbacks.
+                    mode = "off" if source == "off" else "dynamic"
+                    start, b, y, _, _, rate, active, diag, rtf = run_leg(
+                        profile, block, mode, *settings, source=source, pulse=event, phase_slot=block-1)
+                    duration = settings[3]
+                    _, base_peak, _ = motion_metrics(base, start, duration, settings[0]/(2*np.pi))
+                    assert .75*peak_mm <= base_peak <= 1.35*peak_mm, (profile, block, source, base_peak)
+                    warnings = sum("joint velocity" in row.msg and "over the" in row.msg for row in logs[log_index:])
+                    key = dict(profile=profile, block=block, leg=leg, source=source,
+                               seed=seed, peak_mm=peak_mm, phase_slot_ms=block-1)
+                    errors = pose_metrics(start, duration)
+                    append_row(trials, dict(**key, fit_start_s=start, fit_duration_s=duration,
+                                            base_rate_hz=rate, base_peak_mm=base_peak, active_pct=100*active,
+                                            offset_peak_mrad=1000*np.max(diag[:,4]),
+                                            torque_clip_updates=int(diag[-1,3]-diag[0,3]),
+                                            joint_speed_warnings=warnings, rtf=rtf, **errors))
+                    for freq, bp, yp in zip(frequencies, b, y):
+                        h = yp/bp
+                        append_row(responses, dict(**key, frequency_hz=freq, base_mm=1000*abs(bp),
+                                                   tip_mm=1000*abs(yp), transfer_pct=100*abs(h),
+                                                   phase_deg=np.angle(h, deg=True)))
+                    print(f"{profile} {block}/5 {source}: XYZ RMS {errors['tip_xyz_rms_mm']:.3f} mm, "
+                          f"active {100*active:.1f}%", flush=True)
+    print("COMPLETE: 40 sensor-input trials", flush=True)

@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<robot name="sim" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="$(find sim_description)/urdf/xacro/main.xacro"/>
+  <gazebo>
+    <!-- The arm base is rigidly attached to plate with parallel axes. -->
+    <plugin filename="libgazebo_ros_imu.so" name="bench_base_imu_ros">
+      <alwaysOn>true</alwaysOn>
+      <bodyName>plate</bodyName>
+      <frameName>plate</frameName>
+      <topicName>/mapping_bench/base_imu</topicName>
+      <serviceName>/mapping_bench/calibrate_base_imu</serviceName>
+      <updateRate>200</updateRate>
+      <gaussianNoise>0.0</gaussianNoise>
+    </plugin>
+  </gazebo>
+</robot>

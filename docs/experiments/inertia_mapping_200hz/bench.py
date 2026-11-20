@@ -108,7 +108,8 @@ def main(out, args):
     assert rospy.get_param(f"/{ARM}/inertia_feedforward") is True
     assert rospy.get_param(f"/{ARM}/inertia_mapping_experiment") is True
     configured_rate = rospy.get_param("/mapping_bench_base_rate")
-    phase_balanced = args.inertia_phase_balanced or args.inertia_factorial_gain is not None
+    phase_balanced = (args.inertia_phase_balanced or args.inertia_factorial_gain is not None
+                      or args.compare_sensor_inputs)
     base, tip, inertia = [], [], []
     tip_world = []
     base_pose = None
@@ -130,7 +131,8 @@ def main(out, args):
     scale = float(np.linalg.norm(weights))
     unit = weights / scale
     measured_acceleration = None
-    if args.compare_acceleration_sources:
+    imu_acceleration = None
+    if args.compare_acceleration_sources or args.compare_sensor_inputs:
         from acceleration_sources import VelocityAcceleration
         estimator = VelocityAcceleration()
 
@@ -139,8 +141,9 @@ def main(out, args):
         base_pose = msg.pose.pose
         place = base_pose.position
         base.append((msg.header.stamp.to_sec(), float(unit @ (place.x, place.y, place.z))))
-        if args.compare_acceleration_sources:
-            value = estimator.update(msg.header.stamp.to_sec(), msg.twist.twist.linear.y)
+        if args.compare_acceleration_sources or args.compare_sensor_inputs:
+            velocity = msg.twist.twist.linear
+            value = estimator.update(msg.header.stamp.to_sec(), float(unit @ (velocity.x, velocity.y, velocity.z)))
             measured_acceleration = (msg.header.stamp, value, base_pose.orientation) if value is not None else None
 
     def read_tip(msg):
@@ -161,6 +164,17 @@ def main(out, args):
         rospy.Subscriber(f"/{ARM}/inertial_feedforward_state", InertialFeedforwardState,
                          read_inertia, queue_size=20, tcp_nodelay=True),
     ]
+    if args.compare_sensor_inputs:
+        from sensor_msgs.msg import Imu
+        from acceleration_sources import BaseImuAcceleration
+        imu_estimator = BaseImuAcceleration(unit)
+
+        def read_base_imu(msg):
+            nonlocal imu_acceleration
+            imu_acceleration = imu_estimator.update(msg)
+
+        subscribers.append(rospy.Subscriber("/mapping_bench/base_imu", Imu, read_base_imu,
+                                            queue_size=20, tcp_nodelay=True))
     command = rospy.Publisher(f"/{GANTRY}/command", Float64MultiArray, queue_size=1, tcp_nodelay=True)
     acceleration = rospy.Publisher("/gantry/base_linear_acceleration", Vector3Stamped,
                                    queue_size=1, tcp_nodelay=True)
@@ -183,7 +197,11 @@ def main(out, args):
     assert switch([GANTRY], [], 2, False, 5.0).ok
     goal = FollowJointTrajectoryGoal()
     goal.trajectory.joint_names = JOINTS
-    goal.trajectory.points = [JointTrajectoryPoint(positions=pose_positions(args.pose),
+    positions = pose_positions(args.pose)
+    if args.pose_fraction is not None:
+        endpoint = pose_positions("1st_reco_start")
+        positions = [q + args.pose_fraction * (p-q) for q, p in zip(positions, endpoint)]
+    goal.trajectory.points = [JointTrajectoryPoint(positions=positions,
                                                    time_from_start=rospy.Duration(3.0))]
     goal.goal_time_tolerance = rospy.Duration(2.0)
     client.send_goal(goal)
@@ -270,8 +288,8 @@ def main(out, args):
             command.publish(Float64MultiArray(data=gantry_velocity))
             if mode != "off" or keep_acceleration:
                 stamp, q = now, base_pose.orientation
-                if source == "measured":
-                    sample = measured_acceleration
+                if source in ("measured", "imu"):
+                    sample = measured_acceleration if source == "measured" else imu_acceleration
                     if sample is None or sample[0] == last_sample or not 0 <= (now-sample[0]).to_sec() <= .025:
                         rate.sleep()
                         continue
@@ -297,12 +315,20 @@ def main(out, args):
         assert len(diag) >= 90*duration and abs(base_rate-configured_rate) < 1, (profile, mode, base_rate)
         assert np.all(diag[:, 2] == (mode == "static")), (profile, mode)
         active = np.mean(diag[:, 1])
-        assert active == 0 if mode == "off" else active > .4, (profile, mode, active)
+        min_active = 0.0 if pulse is not None else .4
+        assert active == 0 if mode == "off" else active > min_active, (profile, mode, active)
         low, high = (.65, 1.35) if axis == 1 else (.35, 1.80)
         expected = scale * amplitude          # the projected stroke, not one axis'
         assert np.all((low*expected <= abs(p_base)) & (abs(p_base) <= high*expected)), (
             profile, mode, abs(p_base)/expected)
         return begin, p_base, p_tip, base_rms, tip_rms, base_rate, active, diag, rtf
+
+    if args.compare_sensor_inputs:
+        from acceleration_sources import compare_sensor_inputs
+        assert base_response is not None and configured_rate == 200
+        assert imu_acceleration is not None and abs(imu_acceleration[1]) < 0.2, imu_acceleration
+        compare_sensor_inputs(out, run_leg, pose_metrics, base, args.inertia_seed, args.inertia_peak)
+        return
 
     if args.compare_acceleration_sources:
         from acceleration_sources import compare_sources
@@ -323,7 +349,7 @@ def main(out, args):
         from inertia_followup import compare_inertia_factors
         compare_inertia_factors(out, run_leg, pose_metrics, args.pose, args.axis,
                                 args.inertia_factorial_gain, args.inertia_seed, args.inertia_peak,
-                                cross_axis=args.cross_axis)
+                                cross_axis=args.cross_axis, pose_fraction=args.pose_fraction)
         return
 
     if args.tune or args.validate_gains:
@@ -371,6 +397,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
     parser.add_argument("--pose", default="init", help="SRDF manipulator group state")
+    parser.add_argument("--pose-fraction", type=float,
+                        help="interpolate from init towards 1st_reco_start for Y gain tests")
     parser.add_argument("--axis", choices=("x", "y", "z"), default="y", help="Base translation axis")
     parser.add_argument("--cross-axis", default="", metavar="AXIS:FRACTION",
                         help="drive a second base axis with the same waveform at this "
@@ -391,11 +419,20 @@ if __name__ == "__main__":
     suite.add_argument("--inertia-factorial-gain", type=float, metavar="MAGNITUDE",
                        help="Cross both gain signs with projection on/off and a shared zero-gain baseline")
     suite.add_argument("--compare-acceleration-sources", action="store_true")
+    suite.add_argument("--compare-sensor-inputs", action="store_true",
+                       help="compare command-model, odometry and IMU acceleration with feedforward off")
     args = parser.parse_args()
     factorial = args.inertia_factorial_gain is not None
     if factorial and (not np.isfinite(args.inertia_factorial_gain) or args.inertia_factorial_gain <= 0):
         parser.error("Inertia gain magnitude must be finite and positive")
-    inertia_comparison = args.inertia_null or args.compare_tuned_inertia or factorial
+    inertia_comparison = (args.inertia_null or args.compare_tuned_inertia or factorial
+                          or args.compare_sensor_inputs)
+    if args.compare_sensor_inputs and (args.axis != "y" or args.cross_axis):
+        parser.error("Sensor input follow-up uses pure Y translation")
+    if args.pose_fraction is not None and (not factorial or args.pose != "init"
+                                           or args.axis != "y" or args.cross_axis
+                                           or not 0 < args.pose_fraction < 1):
+        parser.error("--pose-fraction requires a pure Y gain factorial starting at init and a fraction in (0,1)")
     if (args.inertia_phase_balanced or args.inertia_seed is not None or args.inertia_peak) and not inertia_comparison:
         parser.error("Inertia phase, seed and peak options require an inertia comparison")
     if args.axis != "y" and not (args.tune or args.validate_gains or args.inertia_phase_balanced or factorial):
