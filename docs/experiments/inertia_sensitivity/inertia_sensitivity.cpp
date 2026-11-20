@@ -1,5 +1,9 @@
 // Static equivalent along-axis offset of the inertial feedforward, and its
-// sensitivity to the model's rotational inertia tensors.
+// sensitivity to the model's own parameters.
+//
+// The second argument is printed verbatim at the head of every data row, so the
+// caller decides what the sweep is over: run.sh passes a bare inertia scale for
+// the published sensitivity.csv and 'family,value,unit' for the parameter sweep.
 //
 // Reproduces the controller's own path: the same chain, the same tip payload,
 // the same damped IK parameters and the same Gazebo joint P gains, so the
@@ -34,9 +38,9 @@ static const Pose POSES[] = {
 
 int main(int argc, char** argv)
 {
-  if (argc < 3) { std::fprintf(stderr, "usage: %s <urdf> <scale-label>\n", argv[0]); return 2; }
+  if (argc < 3) { std::fprintf(stderr, "usage: %s <urdf> <csv-row-prefix>\n", argv[0]); return 2; }
   const std::string path = argv[1];
-  const double label = std::atof(argv[2]);
+  const std::string label = argv[2];   // printed at the head of each data row
 
   urdf::Model model;
   if (!model.initFile(path)) { std::fprintf(stderr, "cannot parse %s\n", path.c_str()); return 1; }
@@ -116,7 +120,7 @@ int main(int argc, char** argv)
           d += J.data.block<3,1>(0, i) * (t(i) / P_GAIN[i]);
         return dir.dot(d);
       };
-      std::printf("%.2f,%s,%c,%.6f,%.6f,%.6f,%.6f,%.6f\n", label, POSES[p].name,
+      std::printf("%s,%s,%c,%.6f,%.6f,%.6f,%.6f,%.6f\n", label.c_str(), POSES[p].name,
                   "xyz"[axis], 1000.0*along(tau), 1000.0*along(tau_inertia),
                   1000.0*along(tau_gravity), tau_inertia.norm(), tau_gravity.norm());
     }
