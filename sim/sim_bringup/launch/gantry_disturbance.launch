@@ -13,6 +13,9 @@
   <arg name="frequency" default="1.0"  doc="Hz"/>
   <arg name="duration"  default="20.0" doc="s, 0 for no limit"/>
   <arg name="ramp"      default="1.0"  doc="s, raised cosine in and out"/>
+  <arg name="base_response_frequency" default="20.61"
+       doc="Hz, the gantry velocity loop the published acceleration is corrected for. 0 publishes the command as asked."/>
+  <arg name="base_response_damping"   default="0.25" doc="its damping ratio"/>
 
   <rosparam file="$(find sim_bringup)/config/gantry_velocity_controller.yaml"
             command="load"/>
@@ -27,5 +30,7 @@
     <param name="frequency" value="$(arg frequency)"/>
     <param name="duration"  value="$(arg duration)"/>
     <param name="ramp"      value="$(arg ramp)"/>
+    <param name="base_response_frequency" value="$(arg base_response_frequency)"/>
+    <param name="base_response_damping"   value="$(arg base_response_damping)"/>
   </node>
 </launch>

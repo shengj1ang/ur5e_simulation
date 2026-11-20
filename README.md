@@ -667,11 +667,33 @@ Two side results are worth keeping. Admitting the wrench through the dynamic
 operational-space mapping rather than a static inertia makes no measurable
 difference at the tip - all three paired intervals span zero - but it does
 roughly halve the joint-level compensation asked for: 4.03 to 2.50 mrad peak at
-5 Hz with the base at 50 Hz, 4.34 to 2.65 at 200 Hz. And the feedforward is fed
-the *commanded* base acceleration, while the measured one runs about 15 % high
-with 11.8-12.7° of lag at 8 Hz, so at the top of the band the term
-under-compensates by a known amount. That is the next thing to fix if the band
-is to be widened.
+5 Hz with the base at 50 Hz, 4.34 to 2.65 at 200 Hz.
+
+The second one was that the feedforward was fed the *commanded* base
+acceleration, which is not the one the base gets. Measured against the command
+over 0.5 to 8 Hz the base overshoots in amplitude and lags in phase, by 15 % and
+12.5° at 8 Hz, growing as about f squared and f. The shape does not depend on
+the travel, 20 or 30 mm, nor on whether the arm's own feedforward is on, so it
+is the gantry's linear response rather than an amplitude effect or a reaction
+from the arm - and one natural frequency with one damping ratio, 20.61 Hz and
+0.25, account for all of it to within 0.4 % and 0.4° across the band.
+
+`gantry_disturbance.py` now passes the commanded acceleration through that model
+before publishing it. The velocity command is untouched, so the disturbance
+itself is unchanged and the measurements above stay comparable; only the topic
+changes, from what the gantry was asked for to what it does. Checked against the
+base's actual motion at eight frequencies, the published value now matches it to
+1.3 % and 2.1° at 8 Hz, and to 0.5 % and 1.6° at and below 5 Hz, against 11.7 %
+and 14.3° uncorrected in the same run
+([data](docs/experiments/inertia_mapping_200hz/base-response-verification.csv);
+`base_response_frequency:=0` restores the uncorrected behaviour).
+
+The residual is wider than the 0.4 % of the fit because the gantry's response is
+not quite repeatable: the same measurement put it at 15.2 % and 12.5° at 8 Hz
+where the model was identified and 13.2 % and 14.3° in the verification run,
+where the arm hung from the trajectory controller instead of holding a world
+pose. One constant model gets the input to about a percent, not a tenth of one,
+and the arm's configuration is the likeliest reason.
 
 ### 4.5 Tuning
 
