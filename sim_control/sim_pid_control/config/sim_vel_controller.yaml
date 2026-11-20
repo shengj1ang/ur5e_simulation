@@ -77,13 +77,14 @@ sim_cartesian_velocity_controller_sim:
   # along-disturbance translation, dropping the cross-axis and rotational parts.
   inertia_feedforward_gain: [-2.0, -0.75, 1.0]
   inertia_project_translation: [x, y]
-  # Where the single-axis domain ends, as the squared cosine between the base
-  # acceleration and its largest component. 0.64 is 37 degrees, which is where
-  # the deployed weight stops beating no correction at all: measured at init
-  # with the X weight against a Y cross axis, it won by 8.6 % of the
-  # three-dimensional RMS at 26.6 degrees and lost 5.3 % at 45. The correction
-  # fades in from there to full weight on a single axis.
-  inertia_alignment_threshold: 0.64
+  # Where the correction is switched off, as the squared cosine between the
+  # base acceleration and its largest component. Zero never fires: the weights
+  # above are applied to each axis' own share of the torque, so a disturbance
+  # off a single axis no longer takes whichever weight belongs to its largest
+  # component. Raise it to fall back to the single-axis domain - 0.9 is the
+  # 18.4 degrees this first shipped with, 0.64 the 37 degrees measured for one
+  # weight on the whole torque.
+  inertia_alignment_threshold: 0.0
   publish_rate: 125
   root_name: base_link
   tip_name: ee_link

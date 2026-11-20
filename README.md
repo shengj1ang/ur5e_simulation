@@ -515,11 +515,13 @@ target with the three outer velocity admittance matrices at zero.
 `inertia_feedforward_gain` carries one weight per `base_link` axis and does not
 depend on the arm's pose. Axes listed in `inertia_project_translation` project the
 equivalent joint offset onto tool translation along the disturbance before
-converting it back to joint torque. `inertia_alignment_threshold` is where the
-single-axis domain ends, as the squared cosine between the base acceleration and
-its largest component, and the correction fades in from there to full weight on
-one axis. Both poses' three translation axes gain from it except `init`'s Y, which
-is a wash.
+converting it back to joint torque. The torque is split per base axis and each
+share carries its own weight, so a disturbance off a single axis is not corrected
+with whichever weight belongs to its largest component.
+`inertia_alignment_threshold` switches the correction off below that squared
+cosine; it is 0 and never fires, and raising it falls back to the single-axis
+domain. Both poses' three translation axes gain from this except `init`'s Y, which
+is a wash, and so do two-axis disturbances out to 45 degrees.
 [Paired tool pose results](docs/inertial_feedforward_report.html#per-axis-weights)
 
 For X, Y and Z disturbances, the gantry node publishes the analytic derivative

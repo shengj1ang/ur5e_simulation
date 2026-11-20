@@ -19,6 +19,9 @@ if [[ -n ${UR5E_BENCH_INERTIA_GAIN:-} ]]; then
     launch_args+=("inertia_feedforward_gain:=$UR5E_BENCH_INERTIA_GAIN")
     launch_args+=("inertia_project_translation:=${UR5E_BENCH_INERTIA_PROJECT:-false}")
 fi
+if [[ -n ${UR5E_BENCH_INERTIA_THRESHOLD:-} ]]; then
+    launch_args+=("inertia_alignment_threshold:=$UR5E_BENCH_INERTIA_THRESHOLD")
+fi
 roslaunch "$bench_dir/bench.launch" "${launch_args[@]}" >"$output_dir/launch.log" 2>&1 &
 processes=($!)
 trap 'kill -INT "${processes[@]}" 2>/dev/null || true; wait || true' EXIT

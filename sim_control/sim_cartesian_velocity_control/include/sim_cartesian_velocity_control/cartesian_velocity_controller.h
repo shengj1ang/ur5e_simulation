@@ -171,8 +171,10 @@ public:
 private:
   struct InertiaCompensation
   {
-    double gain;
-    bool project_translation;
+    std::array<double, 3> gain{{0.0, 0.0, 0.0}};
+    std::array<bool, 3> project_translation{{false, false, false}};
+
+    bool any() const { return gain[0] != 0.0 || gain[1] != 0.0 || gain[2] != 0.0; }
   };
 
   bool loadInertiaWeights(ros::NodeHandle& n);
@@ -180,7 +182,8 @@ private:
   void baseAccelerationCallback(const geometry_msgs::Vector3StampedConstPtr& msg);
   void staticInertiaMappingCallback(const std_msgs::BoolConstPtr& msg);
   void inertiaExperimentCallback(const sim_cartesian_velocity_control::InertiaExperimentSettingConstPtr& msg);
-  bool computeInertialTorque(const KDL::Vector& base_acceleration, bool project_translation,
+  bool computeInertialTorque(const KDL::Vector& base_acceleration,
+                            const InertiaCompensation& compensation,
                             sim_cartesian_velocity_control::InertiaExperimentState* experiment);
 
   /**
@@ -212,7 +215,10 @@ private:
   KDL::JntArray reference_acceleration_;
   KDL::JntArray projected_offset_;
   KDL::JntArray translation_torque_;
-  KDL::JntArray inertial_torque_;
+  KDL::JntArray axis_torque_;        // one base axis' share, weighted at the end
+  KDL::JntArray bias_torque_;        // the Jacobian derivative's share, no axis
+  KDL::JntArray model_torque_;       // the axes' sum before their weights
+  KDL::JntArray inertial_torque_;    // the axes' sum after their weights
   KDL::JntSpaceInertiaMatrix arm_inertia_;
   std::unique_ptr<KDL::ChainJntToJacDotSolver> jacobian_dot_;
   std::unique_ptr<KDL::ChainJntToJacSolver> inertia_jacobian_solver_;

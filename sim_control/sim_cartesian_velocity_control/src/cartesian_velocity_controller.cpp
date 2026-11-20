@@ -489,6 +489,9 @@ bool CartesianVelocityControllerSim::init(hardware_interface::PositionJointInter
   reference_acceleration_.resize(joints);
   projected_offset_.resize(joints);
   translation_torque_.resize(joints);
+  axis_torque_.resize(joints);
+  bias_torque_.resize(joints);
+  model_torque_.resize(joints);
   inertial_torque_.resize(joints);
   arm_inertia_.resize(joints);
   jacobian_dot_.reset(new KDL::ChainJntToJacDotSolver(kdl_chain_));
@@ -581,15 +584,13 @@ bool CartesianVelocityControllerSim::loadInertiaWeights(ros::NodeHandle& n)
     return false;
   }
 
-  // Where the single-axis domain ends, as the squared cosine between the base
-  // acceleration and its largest component: 0.64 is 37 degrees. Below it the
-  // correction is off, above it it fades in. Measured at init with the X weight
-  // against a Y cross axis, the deployed weight still beat leaving it at zero
-  // by 8.6 % of the three-dimensional RMS at 26.6 degrees and cost 5.3 % at
-  // 45 degrees, so the crossing interpolates to 37. Zero never shuts the
-  // correction off, since the largest component of a vector carries at least a
-  // third of its square.
-  n.param("inertia_alignment_threshold", inertia_alignment_threshold_, 0.64);
+  // Where the correction is switched off, as the squared cosine between the
+  // base acceleration and its largest component. It is zero by default: the
+  // weights are applied per axis, so a disturbance off a single axis no longer
+  // takes whichever weight belongs to its largest component, and the gate this
+  // threshold drives has nothing left to protect. Raise it to fall back to the
+  // single-axis domain, 0.9 for the 18.4 degrees it first shipped with.
+  n.param("inertia_alignment_threshold", inertia_alignment_threshold_, 0.0);
   if (!std::isfinite(inertia_alignment_threshold_) || inertia_alignment_threshold_ < 0.0 ||
       inertia_alignment_threshold_ >= 1.0)
   {
@@ -633,21 +634,28 @@ CartesianVelocityControllerSim::inertiaCompensation(const KDL::Vector& accelerat
 {
   const double magnitude_sq = KDL::dot(acceleration, acceleration);
   if (magnitude_sq < 1e-12)
-    return {0.0, false};
+    return {};
   unsigned int axis = 0;
   for (unsigned int i = 1; i < 3; ++i)
     if (std::abs(acceleration(i)) > std::abs(acceleration(axis)))
       axis = i;
   const double alignment = acceleration(axis) * acceleration(axis) / magnitude_sq;
   if (alignment <= inertia_alignment_threshold_)
-    return {0.0, false};
+    return {};
 
-  // The weights were identified along one base axis at a time, so fade the
-  // correction out as the disturbance leaves that domain. A pure single-axis
-  // disturbance leaves the factor at one and the weight as configured.
-  const double weight = (alignment - inertia_alignment_threshold_) /
-                        (1.0 - inertia_alignment_threshold_);
-  return {weight * inertia_feedforward_gain_[axis], inertia_project_translation_[axis]};
+  // A hard floor would step the command, so the correction fades in over a
+  // tenth of the squared cosine above the threshold. At a threshold of 0.9
+  // this is the gate as it was first written; at 0 it never fires, because
+  // the largest component of a vector always carries at least a third of its
+  // square.
+  const double weight = std::min(1.0, (alignment - inertia_alignment_threshold_) / 0.1);
+  InertiaCompensation compensation;
+  for (unsigned int i = 0; i < compensation.gain.size(); ++i)
+  {
+    compensation.gain[i] = weight * inertia_feedforward_gain_[i];
+    compensation.project_translation[i] = inertia_project_translation_[i];
+  }
+  return compensation;
 }
 
 void CartesianVelocityControllerSim::starting(const ros::Time& time)
@@ -688,61 +696,96 @@ void CartesianVelocityControllerSim::inertiaExperimentCallback(
 }
 
 bool CartesianVelocityControllerSim::computeInertialTorque(const KDL::Vector& base_acceleration,
-    bool project_translation, sim_cartesian_velocity_control::InertiaExperimentState* experiment)
+    const InertiaCompensation& compensation,
+    sim_cartesian_velocity_control::InertiaExperimentState* experiment)
 {
   // For a world-fixed tip and a translating root, J*qdd + Jdot*qdot = -a_base.
-  const KDL::Twist task_acceleration(-base_acceleration, KDL::Vector::Zero());
+  // The torque that follows is affine in a_base: with the damped inverse fixed
+  // at this configuration, J# is linear, so each base axis contributes a term
+  // proportional to its own component and the Jacobian derivative contributes
+  // one that does not depend on the acceleration at all. Build the axis terms
+  // apart and weight them apart, so a disturbance off a single axis is not
+  // corrected with whichever weight happens to belong to its largest
+  // component. The term with no axis of its own takes each axis' share of the
+  // acceleration's square, which leaves a single-axis disturbance identical to
+  // weighting the whole torque at once.
+  const double magnitude_sq = KDL::dot(base_acceleration, base_acceleration);
+  if (magnitude_sq <= 0.0)
+    return false;
   KDL::Twist jacobian_bias;
   if (jacobian_dot_->JntToJacDot(joint_msr_, jacobian_bias) != 0 ||
-      ik_vel_solver_->CartToJnt(joint_msr_.q, task_acceleration - jacobian_bias,
-                              reference_acceleration_) != 0 ||
+      ik_vel_solver_->CartToJnt(joint_msr_.q, -jacobian_bias, reference_acceleration_) != 0 ||
       dyn_param_->JntToMass(joint_msr_.q, arm_inertia_) != 0)
     return false;
+  bias_torque_.data.noalias() = arm_inertia_.data * reference_acceleration_.data;
 
-  inertial_torque_.data.noalias() = arm_inertia_.data * reference_acceleration_.data;
-  // In a translating root, the same uniform inertial load as -a_base acts
-  // on every link. KDL gravity torques are linear in that acceleration.
+  const bool projects = compensation.project_translation[0] ||
+                        compensation.project_translation[1] ||
+                        compensation.project_translation[2];
+  const bool jacobian_ready = (projects || experiment) &&
+      inertia_jacobian_solver_->JntToJac(joint_msr_.q, inertia_jacobian_) == 0;
+  if (projects && !jacobian_ready)
+    return false;
+
+  KDL::SetToZero(inertial_torque_);
+  KDL::SetToZero(model_torque_);
+  if (experiment)
+    std::fill(experiment->raw_torque.begin(), experiment->raw_torque.end(), 0.0);
+
   for (unsigned int axis = 0; axis < unit_acceleration_models_.size(); ++axis)
   {
-    if (base_acceleration(axis) == 0.0)
+    const double component = base_acceleration(axis);
+    if (component == 0.0)
       continue;
-    if (unit_acceleration_models_[axis]->JntToGravity(joint_msr_.q, translation_torque_) != 0)
+    KDL::Vector unit = KDL::Vector::Zero();
+    unit(axis) = 1.0;
+    // The same uniform load as -a_base acts on every link, and KDL's gravity
+    // torques are linear in it, so this is the torque per unit of acceleration
+    // along this axis.
+    if (ik_vel_solver_->CartToJnt(joint_msr_.q, KDL::Twist(-unit, KDL::Vector::Zero()),
+                                  reference_acceleration_) != 0 ||
+        unit_acceleration_models_[axis]->JntToGravity(joint_msr_.q, translation_torque_) != 0)
       return false;
-    inertial_torque_.data += base_acceleration(axis) * translation_torque_.data;
-  }
-  if (experiment)
-    std::copy_n(inertial_torque_.data.data(), inertial_torque_.rows(), experiment->raw_torque.begin());
-
-  if (project_translation || experiment)
-  {
-    const double length = base_acceleration.Norm();
-    if (length < 1e-6 || inertia_jacobian_solver_->JntToJac(joint_msr_.q, inertia_jacobian_) != 0)
-      return !project_translation && inertial_torque_.data.allFinite();
-    const KDL::Vector direction = base_acceleration / length;
-    KDL::Vector displacement = KDL::Vector::Zero();
-    for (std::size_t i = 0; i < joint_proportional_gain_.size(); ++i)
-      displacement += inertia_jacobian_.getColumn(i).vel * (inertial_torque_(i) / joint_proportional_gain_[i]);
-    const double axis_offset = KDL::dot(direction, displacement);
+    axis_torque_.data.noalias() = arm_inertia_.data * reference_acceleration_.data;
+    axis_torque_.data += translation_torque_.data;
+    axis_torque_.data *= component;
+    axis_torque_.data += (component*component/magnitude_sq) * bias_torque_.data;
     if (experiment)
-      experiment->raw_axis_offset = experiment->mapped_axis_offset = axis_offset;
-    if (!project_translation)
-      return inertial_torque_.data.allFinite();
+      for (unsigned int i = 0; i < axis_torque_.rows(); ++i)
+        experiment->raw_torque[i] += axis_torque_(i);
 
-    // Project the servo's equivalent position offset along the disturbance.
-    // Keep the nominal orientation and cross-axis position out of this feedforward.
-    const KDL::Twist projected(direction * axis_offset, KDL::Vector::Zero());
-    if (ik_vel_solver_->CartToJnt(joint_msr_.q, projected, projected_offset_) != 0)
-      return false;
-    for (std::size_t i = 0; i < joint_proportional_gain_.size(); ++i)
-      inertial_torque_(i) = joint_proportional_gain_[i] * projected_offset_(i);
-    if (experiment)
+    if (compensation.project_translation[axis])
     {
-      experiment->mapped_axis_offset = 0.0;
+      // Project the servo's equivalent position offset along this axis.
+      // Keep the nominal orientation and cross-axis position out of this
+      // feedforward.
+      KDL::Vector displacement = KDL::Vector::Zero();
       for (std::size_t i = 0; i < joint_proportional_gain_.size(); ++i)
-        experiment->mapped_axis_offset += KDL::dot(direction, inertia_jacobian_.getColumn(i).vel) * projected_offset_(i);
+        displacement += inertia_jacobian_.getColumn(i).vel * (axis_torque_(i) / joint_proportional_gain_[i]);
+      const KDL::Twist projected(unit * KDL::dot(unit, displacement), KDL::Vector::Zero());
+      if (ik_vel_solver_->CartToJnt(joint_msr_.q, projected, projected_offset_) != 0)
+        return false;
+      for (std::size_t i = 0; i < joint_proportional_gain_.size(); ++i)
+        axis_torque_(i) = joint_proportional_gain_[i] * projected_offset_(i);
+    }
+    model_torque_.data += axis_torque_.data;
+    inertial_torque_.data += compensation.gain[axis] * axis_torque_.data;
+  }
+
+  if (experiment && jacobian_ready)
+  {
+    // Report both equivalent offsets along the disturbance itself, whatever
+    // the axes did separately.
+    const KDL::Vector direction = base_acceleration / std::sqrt(magnitude_sq);
+    experiment->raw_axis_offset = experiment->mapped_axis_offset = 0.0;
+    for (std::size_t i = 0; i < joint_proportional_gain_.size(); ++i)
+    {
+      const double along = KDL::dot(direction, inertia_jacobian_.getColumn(i).vel);
+      experiment->raw_axis_offset += along * experiment->raw_torque[i] / joint_proportional_gain_[i];
+      experiment->mapped_axis_offset += along * model_torque_(i) / joint_proportional_gain_[i];
     }
   }
-  return inertial_torque_.data.allFinite();
+  return inertial_torque_.data.allFinite() && model_torque_.data.allFinite();
 }
 
 /** \brief write the desired velocity command in the hardware interface input
@@ -801,10 +844,16 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
   }
 
   const bool experimental = experiment_setting_.trial_id != 0;
-  auto compensation = InertiaCompensation{0.0, false};
-  if (fresh_input)
-    compensation = experimental ? InertiaCompensation{experiment_setting_.gain, experiment_setting_.project_translation} :
-                                  inertiaCompensation(input->linear);
+  InertiaCompensation compensation;
+  if (fresh_input && experimental)
+  {
+    // One weight on every axis is the whole torque at that weight, which is
+    // what this override meant before the axes were weighted apart.
+    compensation.gain.fill(experiment_setting_.gain);
+    compensation.project_translation.fill(experiment_setting_.project_translation != 0);
+  }
+  else if (fresh_input)
+    compensation = inertiaCompensation(input->linear);
 
   const bool publish_diagnostics = inertia_state_pub_ && publish_rate_ > 0.0 &&
                                   (time - last_inertia_state_time_).toSec() >= 1.0 / publish_rate_;
@@ -819,9 +868,9 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
   }
 
   const bool model_valid = fresh_input && dt > 0.0 && reference_unconstrained_ &&
-                           (compensation.gain != 0.0 || experiment) &&
-                           computeInertialTorque(input->linear, compensation.project_translation, experiment);
-  const bool compensate_inertia = model_valid && compensation.gain != 0.0;
+                           (compensation.any() || experiment) &&
+                           computeInertialTorque(input->linear, compensation, experiment);
+  const bool compensate_inertia = model_valid && compensation.any();
   if (experiment)
   {
     experiment->model_valid = model_valid;
@@ -879,8 +928,9 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
       const double d = joint_damping_[i];
       // Both mappings bound the position offset to 25 mrad.
       const double torque_limit = p * 0.025;
+      // Already weighted, one weight per base axis.
       const double model_torque = compensate_inertia ? inertial_torque_(i) : 0.0;
-      const double requested_torque = lead_limited ? 0.0 : compensation.gain * model_torque;
+      const double requested_torque = lead_limited ? 0.0 : model_torque;
       const double torque = std::max(-torque_limit, std::min(torque_limit, requested_torque));
       if (torque != requested_torque)
       {
@@ -900,7 +950,7 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
       if (state)
       {
         state->inertial_offset[i] = offset;
-        state->inertial_torque[i] = model_torque;
+        state->inertial_torque[i] = compensate_inertia ? model_torque_(i) : 0.0;
         state->commanded_torque[i] = torque;
         state->torque_clip_count[i] = torque_clip_count_[i];
       }
@@ -908,7 +958,7 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
       {
         if (!model_valid)
           experiment->raw_torque[i] = 0.0;
-        experiment->mapped_torque[i] = model_valid ? inertial_torque_(i) : 0.0;
+        experiment->mapped_torque[i] = model_valid ? model_torque_(i) : 0.0;
         experiment->requested_torque[i] = requested_torque;
       }
     }

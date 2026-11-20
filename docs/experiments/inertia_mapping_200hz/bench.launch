@@ -3,6 +3,7 @@
   <arg name="pid_params_file" default="$(find sim_pid_control)/config/pid_params.yaml"/>
   <arg name="inertia_feedforward_gain" default=""/>
   <arg name="inertia_project_translation" default="false"/>
+  <arg name="inertia_alignment_threshold" default=""/>
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="world_name" value="$(find sim_gazebo)/world/one_brick.world"/>
     <arg name="gui" value="false"/>
@@ -21,8 +22,14 @@
     <arg name="inertia_mapping_experiment" value="true"/>
     <arg name="PID_PARAMS_FILE" value="$(arg pid_params_file)"/>
   </include>
-  <param name="sim_cartesian_velocity_controller_sim/inertia_feedforward_gain" type="double"
-         value="$(arg inertia_feedforward_gain)" if="$(eval arg('inertia_feedforward_gain') != '')"/>
-  <param name="sim_cartesian_velocity_controller_sim/inertia_project_translation" type="bool"
-         value="$(arg inertia_project_translation)" if="$(eval arg('inertia_feedforward_gain') != '')"/>
+  <!-- YAML, so these take one value for every axis or a list of three, the
+       same as the deployed configuration file. -->
+  <rosparam param="sim_cartesian_velocity_controller_sim/inertia_feedforward_gain"
+            subst_value="true"
+            if="$(eval arg('inertia_feedforward_gain') != '')">$(arg inertia_feedforward_gain)</rosparam>
+  <rosparam param="sim_cartesian_velocity_controller_sim/inertia_project_translation"
+            subst_value="true"
+            if="$(eval arg('inertia_feedforward_gain') != '')">$(arg inertia_project_translation)</rosparam>
+  <param name="sim_cartesian_velocity_controller_sim/inertia_alignment_threshold" type="double"
+         value="$(arg inertia_alignment_threshold)" if="$(eval arg('inertia_alignment_threshold') != '')"/>
 </launch>
