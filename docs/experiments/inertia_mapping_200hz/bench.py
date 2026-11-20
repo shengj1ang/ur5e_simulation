@@ -108,6 +108,7 @@ def main(out, args):
     assert rospy.get_param(f"/{ARM}/inertia_feedforward") is True
     assert rospy.get_param(f"/{ARM}/inertia_mapping_experiment") is True
     configured_rate = rospy.get_param("/mapping_bench_base_rate")
+    phase_balanced = args.inertia_phase_balanced or args.inertia_factorial_gain is not None
     base, tip, inertia = [], [], []
     tip_world = []
     base_pose = None
@@ -129,7 +130,7 @@ def main(out, args):
         stamp = msg.header.stamp.to_sec()
         position, orientation = msg.pose.pose.position, msg.pose.pose.orientation
         tip.append((stamp, getattr(position, args.axis)))
-        if args.inertia_phase_balanced:
+        if phase_balanced:
             tip_world.append((stamp, position.x, position.y, position.z, orientation.x,
                               orientation.y, orientation.z, orientation.w))
 
@@ -182,7 +183,7 @@ def main(out, args):
     target.header.frame_id = "pid"
     hold.publish(target)
     rospy.sleep(1.5)
-    if args.inertia_phase_balanced:
+    if phase_balanced:
         assert tip_world, "No world-frame tool pose received before starting the trials"
         tip_reference = np.array(tip_world[-1][1:])
     print(f"READY: native {configured_rate:g} Hz p3d, SRDF pose {args.pose}, {args.axis.upper()} disturbance", flush=True)
@@ -212,7 +213,7 @@ def main(out, args):
         raise RuntimeError(f"Stationary mapping switch to {mode} did not complete")
 
     def run_leg(profile, block, mode, omega, phase, amplitude, duration,
-                source=None, pulse=None, phase_slot=None):
+                source=None, pulse=None, phase_slot=None, keep_acceleration=False):
         select(mode)
         indices = tuple(map(len, (base, tip, inertia)))
         steady_end = FIT_DELAY + duration + .1
@@ -249,7 +250,7 @@ def main(out, args):
             gantry_velocity = [0.0]*4
             gantry_velocity[axis] = velocity
             command.publish(Float64MultiArray(data=gantry_velocity))
-            if mode != "off":
+            if mode != "off" or keep_acceleration:
                 stamp, q = now, base_pose.orientation
                 if source == "measured":
                     sample = measured_acceleration
@@ -296,6 +297,12 @@ def main(out, args):
                               phase_balanced=args.inertia_phase_balanced,
                               pose_metrics=pose_metrics, seed=args.inertia_seed,
                               peak_mm=args.inertia_peak, axis=args.axis)
+        return
+
+    if args.inertia_factorial_gain is not None:
+        from inertia_followup import compare_inertia_factors
+        compare_inertia_factors(out, run_leg, pose_metrics, args.pose, args.axis,
+                                args.inertia_factorial_gain, args.inertia_seed, args.inertia_peak)
         return
 
     if args.tune or args.validate_gains:
@@ -356,11 +363,16 @@ if __name__ == "__main__":
     suite.add_argument("--compare-tuned-inertia", action="store_true")
     suite.add_argument("--inertia-null", action="store_true",
                        help="Repeat disturbances with inertial feedforward off to measure repeatability")
+    suite.add_argument("--inertia-factorial-gain", type=float, metavar="MAGNITUDE",
+                       help="Cross both gain signs with projection on/off and a shared zero-gain baseline")
     suite.add_argument("--compare-acceleration-sources", action="store_true")
     args = parser.parse_args()
-    inertia_comparison = args.inertia_null or args.compare_tuned_inertia
+    factorial = args.inertia_factorial_gain is not None
+    if factorial and (not np.isfinite(args.inertia_factorial_gain) or args.inertia_factorial_gain <= 0):
+        parser.error("Inertia gain magnitude must be finite and positive")
+    inertia_comparison = args.inertia_null or args.compare_tuned_inertia or factorial
     if (args.inertia_phase_balanced or args.inertia_seed is not None or args.inertia_peak) and not inertia_comparison:
         parser.error("Inertia phase, seed and peak options require an inertia comparison")
-    if args.axis != "y" and not (args.tune or args.validate_gains or args.inertia_phase_balanced):
+    if args.axis != "y" and not (args.tune or args.validate_gains or args.inertia_phase_balanced or factorial):
         parser.error("--axis x/z requires PID gain testing or a phase-balanced inertia comparison")
     main(args.output, args)

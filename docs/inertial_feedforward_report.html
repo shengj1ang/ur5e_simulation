@@ -143,6 +143,9 @@
     <p>验收用扰动前静止时的世界系末端位姿作为参考。三维位移误差取相对位置的欧氏距离，转角误差取相对四元数的最小转角。两项均报告测量窗口内的 RMS 和峰值。对照只切换惯性力矩输入，并由控制器状态确认开关实际生效。</p>
     <p>在正常反馈闭环中，惯性力矩对末端残余误差的幅值和相位随姿态与扰动轴变化。用开关频响试验标定分轴前馈权重。需要限制横向与旋转误差的工况先取模型力矩的等效静态位置偏置 <i>P</i><sub>j</sub><sup>−1</sup><i>τ</i><sub>in</sub>，通过雅可比映射到末端，再只保留沿基座加速度方向的平移。将投影结果经逆解折算回关节位置和等效力矩，最后对标定后的力矩执行限幅和式 (4) 的动态映射。</p>
     <p>运行时按实测关节位置和 <code>base_link</code> 中的主加速度方向选择标定。配方覆盖相应姿态附近的单轴平移。当实测关节偏离标定姿态或扰动方向偏离单轴条件时，惯性修正逐渐衰减。重力、科氏补偿和世界系 PID 按式 (4) 与外环控制律工作。</p>
+    <h3>2.4　权重符号与平移投影的交叉试验</h3>
+    <p>在 <code>init</code> 的 X 向和取料起始姿态的 Y 向分别固定惯性权重绝对值为 2 和 0.75。每个区组用相同的 20 mm 多频波形、相同的 200 Hz 指令采样相位和同一 PID 配置，对照正负权重与投影开关的四种组合及一个共享的零权重基线。零权重组也接收基座加速度。每个工况的五组波形覆盖五种指令采样相位，五种配置各在每个顺序位置出现一次。</p>
+    <p>试验控制器在旧加速度失效、旧偏置衰减后应答设置请求。记录原始逆动力学力矩、投影后的映射力矩、乘权重并经逐关节门控后的请求力矩，以及最小奇异值和回代前后的沿轴等效位移。沿轴复数灵敏度由正负权重的传递函数之差除以两倍权重绝对值，再除以同一组的零权重传递函数。实部为正表示正权重增加与原残差同相的分量。</p>
   </section>
 
   <section aria-labelledby="results">
@@ -260,6 +263,29 @@
     </div>
     <p>取料起始姿态的 30 mm 工况第一轮区间略跨零，以另一组独立波形补测五组。三维位移 RMS 为 1.049 → 0.903 mm，配对改善为 0.146 [0.084, 0.207] mm，转角 RMS 为 3.374 → 2.653 mrad。含补测共 45 组，开启组每组的三维位移 RMS 均低于关闭组。各工况的平均位移峰值和平均转角峰值也下降，部分峰值差的区间仍跨零。开启组在测量窗口内持续生效，90 段均未记录关节限速告警或惯性力矩钳位。</p>
     <p>复测默认配置时，运行 <code>bash run.sh 新输出目录 --compare-tuned-inertia --inertia-phase-balanced</code>。表 6 的 <code>init</code> X、Y、Z 三个方向分别使用 <code>--axis x --inertia-seed 1021949</code>、<code>--axis y --inertia-seed 1021947</code> 和 <code>--axis z --inertia-seed 1021950</code>。取料起始姿态使用 <code>--pose 1st_reco_start --inertia-seed 1021948</code>，追加复测改用 <code>--inertia-seed 1022951 --inertia-peak 30</code>。重复性对照用 <code>--inertia-null</code>，匹配相位的一轮附加 <code>--inertia-phase-balanced --inertia-seed 921950</code>。<a href="experiments/inertia_mapping_200hz/calibrated-inertia-trials.csv">验收逐段数据</a>与<a href="experiments/inertia_mapping_200hz/inertia-repeatability-trials.csv">重复性逐段数据</a>。</p>
+    <h3 id="inertia-factorial">3.6　权重符号与平移投影的交叉对照</h3>
+    <div class="table-frame">
+      <table>
+        <caption>表 7　20 mm 多频扰动下的权重和投影对照（各五组均值）</caption>
+        <thead><tr><th scope="col">姿态与轴向</th><th scope="col">权重</th><th scope="col">平移投影</th><th scope="col">沿轴 RMS (mm)</th><th scope="col">三维位移 RMS (mm)</th><th scope="col">转角 RMS (mrad)</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>init</code> X</th><td>0</td><td>关</td><td>0.741</td><td>0.797</td><td>1.635</td></tr>
+          <tr><th scope="row"><code>init</code> X</th><td>−2</td><td>关</td><td>0.586</td><td>0.924</td><td>2.741</td></tr>
+          <tr><th scope="row"><code>init</code> X</th><td>+2</td><td>关</td><td>0.937</td><td>0.989</td><td>1.551</td></tr>
+          <tr><th scope="row"><code>init</code> X</th><td>−2</td><td>开</td><td>0.567</td><td>0.618</td><td>1.173</td></tr>
+          <tr><th scope="row"><code>init</code> X</th><td>+2</td><td>开</td><td>0.948</td><td>1.012</td><td>2.198</td></tr>
+          <tr><th scope="row">取料起始 Y</th><td>0</td><td>关</td><td>0.562</td><td>0.587</td><td>1.920</td></tr>
+          <tr><th scope="row">取料起始 Y</th><td>−0.75</td><td>关</td><td>0.419</td><td>0.497</td><td>2.017</td></tr>
+          <tr><th scope="row">取料起始 Y</th><td>+0.75</td><td>关</td><td>0.762</td><td>0.767</td><td>2.375</td></tr>
+          <tr><th scope="row">取料起始 Y</th><td>−0.75</td><td>开</td><td>0.430</td><td>0.462</td><td>1.402</td></tr>
+          <tr><th scope="row">取料起始 Y</th><td>+0.75</td><td>开</td><td>0.765</td><td>0.783</td><td>2.612</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>两种姿态下，负权重在开、关投影时均使沿轴 RMS 低于零权重，正权重均使其升高，四种组合与基线的沿轴配对差的 95% 区间均排除零。5 和 8 Hz 下，正权重的归一化复数灵敏度在开、关投影时均具有正的同相分量。比如 8 Hz 下，<code>init</code> X 的同相分量由关投影时的 0.212 变为开投影时的 0.206，取料起始 Y 则由 0.780 变为 0.729。符号对沿轴闭环误差的作用在两种映射下均出现。</p>
+    <p>固定负权重后，开投影使 <code>init</code> X 的三维位移 RMS 再降低 0.305 [0.238, 0.372] mm，取料起始 Y 再降低 0.034 [0.013, 0.056] mm。两者的转角 RMS 分别再降低 1.568 [1.181, 1.955] 和 0.615 [0.487, 0.743] mrad。固定负权重后单看沿轴 RMS，开关投影的配对区间均跨零。投影的主要可测收益体现在三维位置和姿态上。</p>
+    <p>两个工况的测量窗口内，雅可比最小奇异值分别为 0.2086 和 0.1521，均高于 0.05 的阻尼阈值。在 19,997 条原始沿轴偏置绝对值大于 10 nm 的投影样本中，回代增益的最大相对偏差为 2.9×10<sup>−15</sup>，未观测到反号。50 段试验均未记录关节限速告警或惯性力矩钳位。</p>
+    <p>复测使用 <code>bash run.sh 新输出目录 --inertia-factorial-gain 2 --axis x --inertia-seed 162848</code>，取料姿态改用 <code>--inertia-factorial-gain 0.75 --pose 1st_reco_start --axis y</code>。可用 <code>python3 analyze_inertia_factorial.py 输出目录</code> 复算配对区间和频响。原始力矩记录存于虚拟机 <code>~/ur5e_sim_ws/experiment_results/inertia_factorial_162848.U6PCcI/</code>。<a href="experiments/inertia_mapping_200hz/inertia-factorial-trials.csv">逐段数据与诊断摘要</a>与<a href="experiments/inertia_mapping_200hz/inertia-factorial-responses.csv">逐频复数响应数据</a>。</p>
   </section>
 
   <section aria-labelledby="discussion">
@@ -267,7 +293,8 @@
     <p>基准试验中，提高底座状态更新率在 3、5 Hz 分别降低 17.33 和 29.67 个百分点的传递率，反馈调参在 X、Y 两轴各降低约三成末端 RMS。导纳式动态映射相比静态换算明显降低了关节补偿峰值，两种映射的末端误差差异在多数频点仍处于配对波动范围内。随后的采样相位对照和按姿态、方向标定减少了试验波动，并进一步降低了末端位移误差。分轴与末端投影的效果见 <a href="#calibrated-inertia">3.5 节</a>。</p>
     <p>30 mm 的 8 Hz 分量中，实测底座加速度比指令高约 15%、滞后 11.8°–12.7°。该差异在六组间相近，尚无法解释个别组的误差上升。用固有频率 20.61 Hz、阻尼比 0.25 的龙门速度环模型修正加速度后，独立验证中 8 Hz 的幅值偏差由 11.7% 降至 1.3%，相位偏差由 14.3° 降至 2.1°。修正改善了输入的准确性，三种加速度来源的末端误差差异仍在配对波动范围内。该模型在 200 Hz 发布率下辨识，拟合折入了速度指令的保持效应，发布率大幅变化时需重新辨识。标定与验证两次运行测得的台架响应相差约 2 个百分点与 1.8°，后者的机械臂挂在轨迹控制器上而未保持世界系位姿，因此单一常数模型只能把输入对齐到百分之一量级，而非千分之几。</p>
     <p>验证范围是 Gazebo 中的单轴平移扰动与世界系定点保持，覆盖 <code>init</code> 附近的 X、Y、Z 及取料起始姿态附近的 Y。当前惯性前馈使用已知龙门指令经速度环模型修正后的加速度。外部冲击、底座旋转、末端轨迹跟踪、多轴同时扰动和实机性能仍需单独验证。</p>
-    <p><code>with_moveit_new.launch</code> 默认采用 200 Hz。最终配置再次通过了无界面的 MoveIt → PID → MoveIt 验证，20 mm Y 向扰动在 3 Hz、5 Hz 的单次启动检查中测得末端传递率 8.02%、15.96%。<a href="experiments/inertia_mapping_200hz/calibrated-bringup-smoke.csv">启动检查记录</a>。</p>
+    <p><a href="#inertia-factorial">交叉试验</a>支持在两个负权重工况保留平移投影。权重用于抵消实际闭环中的沿轴残差，投影用于改善修正后的三维位姿。权重大小仍按闭环试验标定。以 <code>init</code> 为例，固定质量和质心，只把 KDL 模型中六个臂连杆的转动惯量张量统一缩放 ±10%，单位 Y 向加速度下的静态等效沿轴偏置由 −0.0190 mm 变为 −0.0212 至 −0.0168 mm，Z 向由 +0.0995 mm 变为 +0.0940 至 +0.1050 mm。这项静态检查表明模型参数会影响补偿量，还需要独立的闭环模型灵敏度试验才能量化其对最优权重的贡献。</p>
+    <p><code>with_moveit_new.launch</code> 默认采用 200 Hz。最终标定配置通过了无界面的 MoveIt → PID → MoveIt 验证，20 mm Y 向扰动在 3 Hz、5 Hz 的单次启动检查中测得末端传递率 8.02%、15.96%。加入交叉试验接口后，按正常启动流程重跑交接检查也通过。<a href="experiments/inertia_mapping_200hz/calibrated-bringup-smoke.csv">最终标定时的启动检查记录</a>。</p>
     <details>
       <summary>补充试验数据与复测设置</summary>
       <p>提频的配对改善量在 1、3、5 Hz 分别为 4.42 [3.64, 5.20]、17.33 [15.09, 19.57]、29.67 [24.42, 34.91] 个百分点，方括号是 95% 区间。主试验全程基座净移动约 56 mm。近零净位移的独立复测中，3 Hz 为 33.1% → 16.3%，5 Hz 为 62.6% → 29.3%，基座净移动 1.23 mm。</p>

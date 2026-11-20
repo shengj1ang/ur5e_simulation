@@ -23,6 +23,7 @@
 #include <realtime_tools/realtime_buffer.h>
 #include <realtime_tools/realtime_publisher.h>
 #include "sim_cartesian_velocity_control/InertialFeedforwardState.h"
+#include "sim_cartesian_velocity_control/InertiaExperimentState.h"
 
 namespace controller_interface
 {
@@ -101,7 +102,7 @@ protected:
   KDL::JntArray q_cmd_;
   bool reference_unconstrained_ = false;
 
-  boost::shared_ptr<KDL::ChainIkSolverVel> ik_vel_solver_;
+  boost::shared_ptr<KDL::ChainIkSolverVel_wdls> ik_vel_solver_;
 
   // Damped least squares parameters of the IK solver, plus a hard cap on the
   // joint velocity it returns. See the comment on init() in the .cpp for the
@@ -185,7 +186,9 @@ private:
   InertiaCompensation inertiaCompensation(const KDL::Vector& acceleration) const;
   void baseAccelerationCallback(const geometry_msgs::Vector3StampedConstPtr& msg);
   void staticInertiaMappingCallback(const std_msgs::BoolConstPtr& msg);
-  bool computeInertialTorque(const KDL::Vector& base_acceleration, bool project_translation);
+  void inertiaExperimentCallback(const sim_cartesian_velocity_control::InertiaExperimentSettingConstPtr& msg);
+  bool computeInertialTorque(const KDL::Vector& base_acceleration, bool project_translation,
+                            sim_cartesian_velocity_control::InertiaExperimentState* experiment);
 
   /**
    * Write velocity commands through a position interface
@@ -199,6 +202,8 @@ private:
   };
   realtime_tools::RealtimeBuffer<BaseAcceleration> base_acceleration_;
   realtime_tools::RealtimeBuffer<bool> static_mapping_requested_{false};
+  realtime_tools::RealtimeBuffer<sim_cartesian_velocity_control::InertiaExperimentSetting> experiment_requested_;
+  sim_cartesian_velocity_control::InertiaExperimentSetting experiment_setting_;
   bool inertia_mapping_experiment_ = false;
   bool static_inertia_mapping_ = false;
   ros::Time started_at_;
@@ -223,10 +228,13 @@ private:
   std::array<std::unique_ptr<KDL::ChainDynParam>, 3> unit_acceleration_models_;
   std::unique_ptr<realtime_tools::RealtimePublisher<
       sim_cartesian_velocity_control::InertialFeedforwardState>> inertia_state_pub_;
+  std::unique_ptr<realtime_tools::RealtimePublisher<
+      sim_cartesian_velocity_control::InertiaExperimentState>> experiment_state_pub_;
   ros::Time last_inertia_state_time_;
   std::vector<std::uint32_t> torque_clip_count_;
   ros::Subscriber base_acceleration_subscriber_;
   ros::Subscriber static_mapping_subscriber_;
+  ros::Subscriber experiment_subscriber_;
 };
 
 } // namespace controller_interface

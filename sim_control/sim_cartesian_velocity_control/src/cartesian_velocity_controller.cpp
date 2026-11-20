@@ -526,9 +526,21 @@ bool CartesianVelocityControllerSim::init(hardware_interface::PositionJointInter
       this, ros::TransportHints().tcpNoDelay());
   n.param("inertia_mapping_experiment", inertia_mapping_experiment_, false);
   if (inertia_mapping_experiment_)
+  {
     static_mapping_subscriber_ = n.subscribe(
         "use_static_inertia_mapping", 1, &CartesianVelocityControllerSim::staticInertiaMappingCallback,
         this, ros::TransportHints().tcpNoDelay());
+    experiment_state_pub_.reset(new realtime_tools::RealtimePublisher<
+        sim_cartesian_velocity_control::InertiaExperimentState>(n, "inertia_experiment_state", 4));
+    auto& experiment = experiment_state_pub_->msg_;
+    experiment.header.frame_id = root_name_;
+    experiment.raw_torque.resize(joints);
+    experiment.mapped_torque.resize(joints);
+    experiment.requested_torque.resize(joints);
+    experiment_subscriber_ = n.subscribe(
+        "inertia_experiment_setting", 1, &CartesianVelocityControllerSim::inertiaExperimentCallback,
+        this, ros::TransportHints().tcpNoDelay());
+  }
 
   inertia_feedforward_enabled_ = true;
   ROS_INFO("Cartesian velocity controller: translational inertia feedforward listens on %s (gain %.3g)",
@@ -659,8 +671,15 @@ void CartesianVelocityControllerSim::staticInertiaMappingCallback(const std_msgs
   static_mapping_requested_.writeFromNonRT(msg->data);
 }
 
+void CartesianVelocityControllerSim::inertiaExperimentCallback(
+    const sim_cartesian_velocity_control::InertiaExperimentSettingConstPtr& msg)
+{
+  if (msg->trial_id != 0 && std::isfinite(msg->gain))
+    experiment_requested_.writeFromNonRT(*msg);
+}
+
 bool CartesianVelocityControllerSim::computeInertialTorque(const KDL::Vector& base_acceleration,
-                                                            bool project_translation)
+    bool project_translation, sim_cartesian_velocity_control::InertiaExperimentState* experiment)
 {
   // For a world-fixed tip and a translating root, J*qdd + Jdot*qdot = -a_base.
   const KDL::Twist task_acceleration(-base_acceleration, KDL::Vector::Zero());
@@ -682,22 +701,37 @@ bool CartesianVelocityControllerSim::computeInertialTorque(const KDL::Vector& ba
       return false;
     inertial_torque_.data += base_acceleration(axis) * translation_torque_.data;
   }
-  if (project_translation)
+  if (experiment)
+    std::copy_n(inertial_torque_.data.data(), inertial_torque_.rows(), experiment->raw_torque.begin());
+
+  if (project_translation || experiment)
   {
     const double length = base_acceleration.Norm();
     if (length < 1e-6 || inertia_jacobian_solver_->JntToJac(joint_msr_.q, inertia_jacobian_) != 0)
-      return false;
+      return !project_translation && inertial_torque_.data.allFinite();
     const KDL::Vector direction = base_acceleration / length;
     KDL::Vector displacement = KDL::Vector::Zero();
     for (std::size_t i = 0; i < joint_proportional_gain_.size(); ++i)
       displacement += inertia_jacobian_.getColumn(i).vel * (inertial_torque_(i) / joint_proportional_gain_[i]);
+    const double axis_offset = KDL::dot(direction, displacement);
+    if (experiment)
+      experiment->raw_axis_offset = experiment->mapped_axis_offset = axis_offset;
+    if (!project_translation)
+      return inertial_torque_.data.allFinite();
+
     // Project the servo's equivalent position offset along the disturbance.
     // Keep the nominal orientation and cross-axis position out of this feedforward.
-    const KDL::Twist projected(direction * KDL::dot(direction, displacement), KDL::Vector::Zero());
+    const KDL::Twist projected(direction * axis_offset, KDL::Vector::Zero());
     if (ik_vel_solver_->CartToJnt(joint_msr_.q, projected, projected_offset_) != 0)
       return false;
     for (std::size_t i = 0; i < joint_proportional_gain_.size(); ++i)
       inertial_torque_(i) = joint_proportional_gain_[i] * projected_offset_(i);
+    if (experiment)
+    {
+      experiment->mapped_axis_offset = 0.0;
+      for (std::size_t i = 0; i < joint_proportional_gain_.size(); ++i)
+        experiment->mapped_axis_offset += KDL::dot(direction, inertia_jacobian_.getColumn(i).vel) * projected_offset_(i);
+    }
   }
   return inertial_torque_.data.allFinite();
 }
@@ -749,28 +783,53 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
   const auto* input = inertia_feedforward_enabled_ ? base_acceleration_.readFromRT() : nullptr;
   const bool fresh_input = input && !input->stamp.isZero() && input->stamp >= started_at_ &&
                            input->stamp <= time && (time - input->stamp).toSec() <= 0.05;
-  const auto compensation = fresh_input ? inertiaCompensation(input->linear) : InertiaCompensation{0.0, false};
-  const bool compensate_inertia = fresh_input && dt > 0.0 && reference_unconstrained_ &&
-                                  compensation.gain != 0.0 &&
-                                  computeInertialTorque(input->linear, compensation.project_translation);
-  const bool static_requested = inertia_mapping_experiment_ && *static_mapping_requested_.readFromRT();
   // Switch between trials, after the last sample has expired and the offset
   // has decayed. Switching during a disturbance would kick the servo's D term.
-  if (static_requested != static_inertia_mapping_ && !fresh_input &&
-      inertial_offset_.data.cwiseAbs().maxCoeff() < 1e-5)
-    static_inertia_mapping_ = static_requested;
+  if (inertia_mapping_experiment_ && !fresh_input && inertial_offset_.data.cwiseAbs().maxCoeff() < 1e-5)
+  {
+    static_inertia_mapping_ = *static_mapping_requested_.readFromRT();
+    experiment_setting_ = *experiment_requested_.readFromRT();
+  }
+
+  const bool experimental = experiment_setting_.trial_id != 0;
+  auto compensation = InertiaCompensation{0.0, false};
+  if (fresh_input)
+    compensation = experimental ? InertiaCompensation{experiment_setting_.gain, experiment_setting_.project_translation} :
+                                  inertiaCompensation(input->linear);
+
+  const bool publish_diagnostics = inertia_state_pub_ && publish_rate_ > 0.0 &&
+                                  (time - last_inertia_state_time_).toSec() >= 1.0 / publish_rate_;
+  sim_cartesian_velocity_control::InertiaExperimentState* experiment = nullptr;
+  if (experimental && publish_diagnostics && experiment_state_pub_->trylock())
+  {
+    experiment = &experiment_state_pub_->msg_;
+    experiment->header.stamp = time;
+    experiment->setting = experiment_setting_;
+    experiment->sigma_min = ik_vel_solver_->getSigmaMin();
+    experiment->raw_axis_offset = experiment->mapped_axis_offset = 0.0;
+  }
+
+  const bool model_valid = fresh_input && dt > 0.0 && reference_unconstrained_ &&
+                           (compensation.gain != 0.0 || experiment) &&
+                           computeInertialTorque(input->linear, compensation.project_translation, experiment);
+  const bool compensate_inertia = model_valid && compensation.gain != 0.0;
+  if (experiment)
+  {
+    experiment->model_valid = model_valid;
+    if (!model_valid)
+      experiment->raw_axis_offset = experiment->mapped_axis_offset = 0.0;
+  }
 
   sim_cartesian_velocity_control::InertialFeedforwardState* state = nullptr;
-  if (inertia_state_pub_ && publish_rate_ > 0.0 &&
-      (time - last_inertia_state_time_).toSec() >= 1.0 / publish_rate_ &&
-      inertia_state_pub_->trylock())
+  if (publish_diagnostics && inertia_state_pub_->trylock())
   {
-    last_inertia_state_time_ = time;
     state = &inertia_state_pub_->msg_;
     state->header.stamp = time;
     state->active = compensate_inertia;
     state->static_mapping = static_inertia_mapping_;
   }
+  if (state || experiment)
+    last_inertia_state_time_ = time;
   for(std::size_t i=0; i < this->joint_handles_.size(); i++)
   {
     q_cmd_(i) += q_dt_cmd_(i)*dt;
@@ -836,11 +895,20 @@ void CartesianVelocityControllerSim::writeVelocityCommands(const ros::Time& time
         state->commanded_torque[i] = torque;
         state->torque_clip_count[i] = torque_clip_count_[i];
       }
+      if (experiment)
+      {
+        if (!model_valid)
+          experiment->raw_torque[i] = 0.0;
+        experiment->mapped_torque[i] = model_valid ? inertial_torque_(i) : 0.0;
+        experiment->requested_torque[i] = requested_torque;
+      }
     }
     this->joint_handles_[i].setCommand(command);
   }
   if (state)
     inertia_state_pub_->unlockAndPublish();
+  if (experiment)
+    experiment_state_pub_->unlockAndPublish();
 }
 
 } // controller_interface namespace
