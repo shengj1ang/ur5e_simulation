@@ -166,6 +166,12 @@ rosparam get /K_p
 rosparam get /mass_arm
 ```
 
+The deployed translational PID gains, for reference, are `K_p` 12.0 and `K_d`
+0.35 in x and y and 7.7 and 0.10 in z, all chosen against a 20 mm multisine base
+disturbance at 200 Hz base state (README §4.4). Z keeps the original gains
+because every candidate that lowered its overall error raised the transmission
+at its worst frequency.
+
 ### Change how fast the base state is published
 
 ```bash
@@ -463,7 +469,17 @@ rosrun controller_manager controller_manager start sim_cartesian_velocity_contro
 `roslaunch sim_bringup init_pose_start_controllers.launch` is meant to do the pose
 and the switch in one go, but only the switch works (README §6) — place the arm with
 a trajectory first if you need a particular pose. Afterwards MoveIt cannot execute
-until you switch back:
+until you switch back, which the same launch file now does:
+
+```bash
+roslaunch sim_bringup init_pose_start_controllers.launch mode:=moveit
+```
+
+`mode` is `cartesian` by default, which is the behaviour above. `mode:=moveit`
+switches back and then waits for a continuous 350 ms of measured joint positions
+within 1 mrad before it exits, so a plan issued straight afterwards is not
+planning from a pose that is still moving. It exits non-zero and says why if the
+handoff or the settling fails. By hand it is still:
 
 ```bash
 rosrun controller_manager controller_manager stop sim_cartesian_velocity_controller_sim

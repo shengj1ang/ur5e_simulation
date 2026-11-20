@@ -656,6 +656,31 @@ both test poses - 1.24 to 0.85 mm against a 20 mm command, a paired
 RMS-transmission improvement of 4.76 [2.99, 6.53] points at `init` and 5.51
 [3.64, 7.38] at the SRDF pickup pose.
 
+X was retuned the same way afterwards and is the best-evidenced result in this
+section: at `init` against a 20 mm multisine, directional RMS fell from 1.316
+to 0.864 mm, a paired 0.452 [0.385, 0.519] mm, and the worst single frequency
+from 59.07 % to 38.37 %, a paired 20.70 [17.97, 23.43] points. Both intervals
+sit well clear of zero, which is more than most of the results here can say.
+The screen behind it is worth reading for which knob did the work: at the
+original `K_p` 17.7, raising `K_d` from 0.10 to 0.35 alone took RMS from 1.303
+to 0.809 mm, and dropping `K_p` to 12.0 then bought almost nothing further on
+RMS, 0.802 mm, but three points of worst-frequency transmission, 41.08 % to
+37.93 %. The derivative term carried the overall error and the proportional
+term the worst tone. Z was screened and deliberately left alone: the original
+gains gave the lowest worst-frequency transmission, 17.57 %, and (12.0, 0.20)
+would have traded overall RMS, 0.842 down to 0.789 mm, for 22.89 % at the worst
+frequency. The deployed translational gains are now
+
+| Axis | `K_p` | `K_d` | Basis |
+|---|---:|---:|---|
+| x | 12.0 | 0.35 | 20 mm at `init`, independent paired validation |
+| y | 12.0 | 0.35 | 20 and 30 mm, validated at two poses |
+| z | 7.7 | 0.10 | screened at 20 mm, the original gains kept |
+
+with the rotational gains untouched. X and Z were tuned with the corrected base
+acceleration in the feedforward and Y before that correction existed, which the
+next paragraphs explain is not a confound.
+
 Only with those gains in place does the inertial branch separate from zero in a
 single design: at `init` with a 20 mm multisine, turning it on took RMS from
 0.82 to 0.76 mm, 0.70 [0.33, 1.06] points of RMS transmission. At 30 mm it is
@@ -694,6 +719,24 @@ where the model was identified and 13.2 % and 14.3° in the verification run,
 where the arm hung from the trajectory controller instead of holding a world
 pose. One constant model gets the input to about a percent, not a tenth of one,
 and the arm's configuration is the likeliest reason.
+
+And it buys nothing at the end effector, which deserves saying as plainly as the
+correction itself. Feeding the term the raw command, the corrected command, or a
+causal derivative of the measured base velocity - six paired blocks each on a
+30 mm multisine and on a smooth there-and-back pulse, with the base RMS matched
+to 0.1 % inside every block - leaves all nine paired differences spanning zero.
+Raw command minus corrected command is −0.26 ± 0.37 points of RMS transmission on
+the multisine and +0.07 ± 0.16 on the pulse, positive meaning the correction did
+better; the measured derivative is indistinguishable from either
+([data](docs/experiments/inertia_mapping_200hz/acceleration-source-trials.csv)).
+
+That is the expected result rather than a disappointing one. The inertial term is
+worth about a point in all, so 15 % of it is about 0.15 points - an order of
+magnitude below this rig's own two-to-three point floor, and nothing this bench
+can see. The correction stays because it makes the topic tell the truth about
+the base, not because it improves rejection. The same measurement also closes the
+other option: differentiating the measured base velocity, which would carry p3d's
+noise back into the feedforward, is no better than the model it would replace.
 
 ### 4.5 Tuning
 
