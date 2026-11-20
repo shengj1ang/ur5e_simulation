@@ -1,0 +1,18 @@
+# inertia tensors scaled by 0.90
+# payload_mass_kg 0.7669 cog 0.0664 -0.0018 0.0509
+# init gravity_torque_nm 0.0000 -18.8480 -18.8152 -1.3939 0.0000 0.3832
+# init apparent_mass_kg 8.4332 4.8760 4.1442  gravity_wrench_n 44.4423  sigma_min 0.2140
+# 1st_reco_start gravity_torque_nm 0.0000 -42.1568 -19.9359 -2.5146 -0.0125 -0.0003
+# 1st_reco_start apparent_mass_kg 9.8831 4.4673 4.1442  gravity_wrench_n 56.0618  sigma_min 0.1541
+# inertia tensors scaled by 1.00
+# payload_mass_kg 0.7669 cog 0.0664 -0.0018 0.0509
+# init gravity_torque_nm 0.0000 -18.8480 -18.8152 -1.3939 0.0000 0.3832
+# init apparent_mass_kg 8.5073 4.9205 4.1645  gravity_wrench_n 44.4423  sigma_min 0.2140
+# 1st_reco_start gravity_torque_nm 0.0000 -42.1568 -19.9359 -2.5146 -0.0125 -0.0003
+# 1st_reco_start apparent_mass_kg 9.9961 4.4890 4.1645  gravity_wrench_n 56.0618  sigma_min 0.1541
+# inertia tensors scaled by 1.10
+# payload_mass_kg 0.7669 cog 0.0664 -0.0018 0.0509
+# init gravity_torque_nm 0.0000 -18.8480 -18.8152 -1.3939 0.0000 0.3832
+# init apparent_mass_kg 8.5814 4.9649 4.1847  gravity_wrench_n 44.4423  sigma_min 0.2140
+# 1st_reco_start gravity_torque_nm 0.0000 -42.1568 -19.9359 -2.5146 -0.0125 -0.0003
+# 1st_reco_start apparent_mass_kg 10.1091 4.5107 4.1847  gravity_wrench_n 56.0618  sigma_min 0.1541
