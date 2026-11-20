@@ -441,14 +441,19 @@ roslaunch sim_bringup gantry_disturbance.launch axis:=y amplitude:=0.02 frequenc
 按轴分解，每一份各乘各的权重，偏离单轴的扰动因此不再被主导轴的权重修正。
 `inertia_project_translation` 中的轴只保留该轴方向的末端平移，丢掉横向与转动部分。
 `inertia_alignment_threshold` 取基座加速度与其最大分量夹角的余弦平方，低于它就关闭修正；
-默认 0 永不触发，调高则退回单轴域。两个姿态的三个平移轴都有收益，只有 `init` 的 Y 向
-持平；偏离单轴到 45 度同样有收益。
-[末端位姿开关对照](docs/inertial_feedforward_report.html#per-axis-weights)
+默认 0 永不触发，调高则退回单轴域。最终默认配置沿用原波形种子，复跑两个姿态、三个平移轴
+和 20、30 mm 两种幅值。12 个工况中有 10 个的末端三维位移 RMS 降低 5.0% 至 45.1%，
+`init` Y 向两个幅值的配对区间均跨零。双轴对照覆盖 `init` 的一组 X/Y 方向，包含 45 度。
+[末端位姿开关对照](docs/inertial_feedforward_report.html#final-recheck)
 
-龙门的 X、Y、Z 轴扰动会在 `/gantry/base_linear_acceleration` 发布带仿真时间戳的
-`geometry_msgs/Vector3Stamped`，单位 m/s²，坐标系为 `base_link`。它由龙门速度指令解析求导得到，
-包含升降沿。其他加速度源可以使用同一个接口，或通过 `base_acceleration_topic` 指定话题。
-该模型适用于基座平移、末端保持世界系目标的工况。
+龙门节点对 X、Y、Z 轴的速度指令解析求导，包含升降沿，默认再经拟合的龙门速度环模型修正。
+结果以带仿真时间戳的 `geometry_msgs/Vector3Stamped` 发布到
+`/gantry/base_linear_acceleration`，单位 m/s²，坐标系为 `base_link`。其他加速度源可用同一接口，
+或通过 `base_acceleration_topic` 指定话题。该模型适用于基座平移、末端保持世界系目标的工况。
+
+取料起始姿态的 Y 向 30 mm 多频试验中，模拟连杆加速度前馈比指令模型前馈再降低 15.6% 的
+末端三维位移 RMS，脉冲对照的差异尚不明确。测量前馈仍是试验选项，默认采用指令模型和每轴固定权重。
+[测量前馈与权重复验](docs/experiments/inertia_mapping_200hz/sensor_gain_followup/README.md)
 
 关节层使用含负载的 KDL 链，计算维持末端目标所需的惯性力矩和基座加速施加的耦合力矩。
 两项相加后通过逐关节的 `D·Δq̇ + P·Δq = τ_inertia` 换算为位置偏置，叠加到最终位置指令。

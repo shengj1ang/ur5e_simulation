@@ -1,18 +1,18 @@
 # UR5e 末端抗扰仿真待办
 
-先用现有位置接口解决两个可单独验证的问题。第一，在接收不到扰动指令时，传感器能否提供有效的惯性前馈。第二，同一个权重在不同姿态和频带能否稳定降低末端误差。先做这两项，后续再根据结果决定是否引入完整移动基座逆动力学和新控制接口。 [文献与全文](README.md)
+原任务已完成 Gazebo 龙门平移扰动下的世界系末端定点保持。默认使用指令模型和分轴动力学位置补偿。测量前馈与 Y 向权重已做针对性复验，余下各项可在工况扩展或误差指标收紧时再做。 [验收报告](../inertial_feedforward_report.html#final-recheck) · [文献与全文](README.md)
 
 ## 已有证据
 
-当前默认配置用世界系 PID、运动学前馈和分轴动力学位置补偿。VM 上用相同扰动种子重新运行了两个姿态、三个平移轴、20 和 30 mm 共 12 个工况。每个工况有五组前馈开关配对。10 个工况的三维位移 RMS 降低 4.96% 至 45.10%，`init` Y 向两个幅值的均值升高 1.75% 和 2.26%，配对 95% 区间均跨零。逐段记录在 VM 的 `~/ur5e_sim_ws/experiment_results/final-per-axis-recheck.W5zgBV/`。 [控制器模型](../../sim_control/sim_cartesian_velocity_control/src/cartesian_velocity_controller.cpp#L698) · [当前参数](../../sim_control/sim_pid_control/config/sim_vel_controller.yaml#L57)
+当前默认配置用世界系 PID、运动学前馈和分轴动力学位置补偿。VM 上用相同扰动种子重新运行了两个姿态、三个平移轴、20 和 30 mm 共 12 个工况。每个工况有五组前馈开关配对。10 个工况的三维位移 RMS 降低 4.96% 至 45.10%，`init` Y 向两个幅值的均值升高 1.75% 和 2.26%，配对 95% 区间均跨零。复测沿用原验收波形种子，比较的是相同激励下的可重复性。 [复测逐段数据](../experiments/inertia_mapping_200hz/final-per-axis-recheck-trials.csv) · [控制器模型](../../sim_control/sim_cartesian_velocity_control/src/cartesian_velocity_controller.cpp#L698) · [当前参数](../../sim_control/sim_pid_control/config/sim_vel_controller.yaml#L57)
 
-同一批数据中的 30 mm、8 Hz 沿扰动轴传递率，`init` Y 由 36.65% 升至 37.23%，取料起始 Y 由 20.44% 降至 12.18%。第一个变化很小，两个姿态的量级差异值得在新波形和中间姿态上验证。报告曾测到 Y 向在两个姿态偏好的权重符号相反。静态模型中，`init` Y 的惯性项和等效重力项也近乎相消。闭环频响有助于进一步区分模型净力矩、位置伺服和采样相位各自的影响。 [现有权重试验](../inertial_feedforward_report.html#per-axis-weights) · [模型灵敏度讨论](../inertial_feedforward_report.html#discussion)
+同一批数据中的 30 mm、8 Hz 沿扰动轴传递率，`init` Y 由 36.65% 升至 37.23%，取料起始 Y 由 20.44% 降至 12.18%。第一个变化很小。后续权重对照使用一批新波形，并增加了一个中间姿态。三个姿态共用这批新波形。静态模型中，`init` Y 的惯性项和等效重力项也近乎相消。闭环频响有助于进一步区分模型净力矩、位置伺服和采样相位各自的影响。 [现有权重试验](../inertial_feedforward_report.html#per-axis-weights) · [模型灵敏度讨论](../inertial_feedforward_report.html#discussion)
 
-报告的加速度来源试验已经对比过指令、修正指令和基座速度求导。三者在同一组有指令的扰动下未检出末端误差差异。下一轮应让扰动发生器独立于控制器，检查仅靠传感器能否恢复前馈收益。 [加速度来源逐段试验](../experiments/inertia_mapping_200hz/acceleration-source-trials.csv) · [现有速度求导实现](../experiments/inertia_mapping_200hz/acceleration_sources.py#L15)
+报告的加速度来源试验已经对比过指令、修正指令和基座速度求导。早期试验在有指令的工况下未检出三种输入的末端误差差异。后续复验将扰动指令与测量前馈输入分开，检验惯性支路只读基座测量时的收益。 [加速度来源逐段试验](../experiments/inertia_mapping_200hz/acceleration-source-trials.csv) · [现有速度求导实现](../experiments/inertia_mapping_200hz/acceleration_sources.py#L15)
 
 ## 前两项复验
 
-200 Hz Gazebo 对照验证了基座测量前馈，速度求导和模型级连杆加速度都降低了取料起始姿态的多频误差。Y 向符号对照覆盖了两个原姿态和一个中间姿态，支持保留当前全局默认值，并将正权重限制在已有收益证据的局部候选中。 [115 段复验与数据](../experiments/inertia_mapping_200hz/sensor_gain_followup/README.md)
+200 Hz Gazebo 对照中，速度求导和模型级连杆加速度都降低了取料起始姿态的多频误差。连杆加速度比默认指令模型进一步降低 15.6% 的三维位移 RMS，脉冲下两者的差值区间跨零。Y 向符号对照覆盖了两个原姿态和一个中间姿态，支持保留当前全局默认值。若考虑让测量前馈替代默认输入，优先用另一个姿态和留出的波形种子做配对验证。 [115 段复验与数据](../experiments/inertia_mapping_200hz/sensor_gain_followup/README.md)
 
 ## 每项的取舍方法
 
@@ -21,16 +21,16 @@
 - **明确实际收益。** 以相对于世界系目标的三维位移 RMS 为主指标，同时记录最大位置误差、转角 RMS 和峰值。短脉冲另报回稳时间，所有工况记录关节限速、力矩饱和、补偿有效比例和控制周期。通过相同配置的重复试验估计波动，试验前确定能接受的最小改善和最差工况退化量。若收益与波动同量级，或某个关键工况的退化超出预设范围，就保留原配置并跳过该候选。
 - **最终验证覆盖输入和模型误差。** 用未见波形、相位独立的双轴及三轴扰动、非周期脉冲复验保留项，再逐项对被控对象施加负载或质心偏差、关节阻尼变化、传感器噪声、延迟和丢样。控制器使用名义模型。优先看最差工况，然后再看典型工况的 RMS 改善。
 
-## 按顺序试验
+## 已完成对照与可选试验
 
 ### 1. 让惯性前馈使用实测基座加速度
 
-- [ ] 三个输入共用当前的 `/gantry/base_linear_acceleration` 接口。用现有指令模型、基座速度的因果求导、新增的 `base_link` 模拟 IMU 做对照。现有 IMU 装在 `ee_link`，基座 IMU 可从静止读数和三个已知方向的平移开始检查重力符号、坐标系和时间戳。需要降低噪声时再试 IMU 与速度的互补滤波或简单卡尔曼滤波。 [现有 IMU 安装](../../sim/sim_description/urdf/xacro/main.xacro#L295) · [Solà 全文](Sola-2017-Error-State-Kalman-Filter.pdf)
-- [ ] 用独立进程注入随机多频平移，再加入独立的非周期扰动。只给指令基线本来能获取的指令，不把注入波形传给估计器。隐藏指令检验对扰动指令的依赖。若要检验实际外力，再给基座连杆独立施力，并核对它确实引起了基座运动。传感器组与惯性前馈关闭组比较。仿真真实加速度可单开一组作为理想输入参考，用于区分输入估计误差和补偿模型误差。两类试验都记录加速度幅值、相位、延迟和末端误差。未知扰动下有可复现的收益，且已知指令工况的误差在可接受范围内，就保留测量前馈。若三点求导就能达到同样效果，先保留简单实现。
+- [x] 在取料起始姿态 Y 向 30 mm 扰动下，对照指令模型、基座速度求导、Gazebo 模型级连杆加速度和关闭惯性前馈。测量支路取用仿真运动数据，实际 IMU 噪声、丢样和延迟仍待验证。 [测量复验](../experiments/inertia_mapping_200hz/sensor_gain_followup/README.md#基座测量能否恢复前馈收益) · [Solà 全文](Sola-2017-Error-State-Kalman-Filter.pdf)
+- [ ] 如需覆盖基座外力，给基座连杆独立施力，核对它确实引起基座运动，并做同波形开关对照。若优先评估默认输入替换，先用留出种子和新姿态验证已知运动下的测量性能。
 
 ### 2. 找到适合不同姿态和频带的补偿量
 
-- [ ] 先测 `init` Y、取料起始 Y，再加入若干中间姿态。保持相同的平移投影，分别做权重为零、当前值、小幅正权重和小幅负权重的对照。固定姿态做多正弦，先看末端三维位移和转角，再看各频点的幅值和相位。该对照能检验历史结果究竟有多少来自符号，有多少来自投影。 [现有交叉试验](../inertial_feedforward_report.html#inertia-factorial)
+- [x] 在 `init`、取料起始和两者间关节插值 20% 的姿态，对照零权重、±0.75 和投影开关。正权重的收益只在本次测试的 `init` 姿态出现。 [权重复验](../experiments/inertia_mapping_200hz/sensor_gain_followup/README.md#y-向增益是否可以按姿态调整)
 - [ ] 分别测量基座扰动到末端误差的闭环频响和小幅独立补偿输入到末端误差的闭环频响。对多轴辨识使用可区分的输入激励，记录三维平移和三维小角误差。在线性近似可用的工况，用 `e(jω) ≈ H_d(jω)d(jω) + H_u(jω)u(jω)` 判断当前补偿在何处减小总误差。 [Dirkx 全文](Dirkx-2020-Multivariable-FRF-Identification.pdf) · [Pintelon 全文](Pintelon-2020-Best-Linear-Approximation-in-Feedback.pdf)
 - [ ] 从最简单的候选开始。若收益只随姿态变化，试少数姿态点的连续增益调度，并在证据较弱的区域平滑减小补偿。若频率和相位也影响结果，再试低阶、因果、带限的补偿滤波器。只有交叉轴误差仍占显著比例才增加跨轴项。若联合拟合位移和转角，用任务各自允许的误差归一化。用留出的姿态、扰动方向和波形验证，再按共同指标决定是否保留。 [Mae 全文](Mae-2025-Sampled-Data-MIMO-Feedforward.pdf)
 

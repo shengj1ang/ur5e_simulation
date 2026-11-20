@@ -16,6 +16,7 @@
 *.png  binary
 *.jpg  binary
 *.jpeg binary
+docs/References/*.pdf binary
 
 # COLLADA meshes are XML documents, so they stay text (with LF).
 *.dae  text eol=lf

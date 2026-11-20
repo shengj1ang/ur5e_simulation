@@ -520,18 +520,26 @@ weight belongs to its largest component. Axes listed in
 dropping the cross-axis and rotational parts. `inertia_alignment_threshold`
 switches the correction off when the squared cosine between the base acceleration
 and its largest component falls below it; at 0 it never fires, and raising it
-falls back to the single-axis domain. Both poses' three translation axes gain from
-this except `init`'s Y, which is a wash, and so do two-axis disturbances out to
-45 degrees.
-[Paired tool pose results](docs/inertial_feedforward_report.html#per-axis-weights)
+falls back to the single-axis domain. The final default was rerun at two poses
+on all three translation axes, with 20 and 30 mm disturbances and the original
+waveform seeds. Ten of the twelve conditions reduced 3D tool displacement RMS
+by 5.0–45.1%. Both `init` Y-axis intervals crossed zero. The two-axis data cover
+one X/Y direction family at `init`, including 45 degrees.
+[Paired tool pose results](docs/inertial_feedforward_report.html#final-recheck)
 
-For X, Y and Z disturbances, the gantry node publishes the analytic derivative
-of its velocity command, including the ramps, on
-`/gantry/base_linear_acceleration`. It is a simulation-time stamped
-`geometry_msgs/Vector3Stamped` in m/s² and expressed in `base_link`.
-Other sources can publish a translational acceleration using the same interface
-or set `base_acceleration_topic`. This model assumes a translating base and a
-world-fixed end-effector target.
+For X, Y and Z disturbances, the gantry node differentiates its velocity command
+including the ramps, then applies the fitted gantry velocity-loop model by
+default. It publishes the result on `/gantry/base_linear_acceleration` as a
+simulation-time stamped `geometry_msgs/Vector3Stamped` in m/s² in `base_link`.
+Other sources can use the same interface or set `base_acceleration_topic`.
+This model assumes a translating base and a world-fixed tool target.
+
+At the picking start pose, the simulated link-acceleration input reduced tool
+position RMS by a further 15.6% relative to command-based feedforward under a
+30 mm Y-axis multisine. The pulse comparison was inconclusive. Measurement-based
+feedforward remains an experimental option. The default uses the command model
+and fixed per-axis weights.
+[Measurement and gain follow-up](docs/experiments/inertia_mapping_200hz/sensor_gain_followup/README.md)
 
 The payload-aware KDL chain supplies both the joint inertia needed to hold the
 tool in world and the inertial coupling from the accelerating base. The
