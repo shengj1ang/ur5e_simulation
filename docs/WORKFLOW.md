@@ -478,8 +478,12 @@ roslaunch sim_bringup init_pose_start_controllers.launch mode:=moveit
 `mode` is `cartesian` by default, which is the behaviour above. `mode:=moveit`
 switches back and then waits for a continuous 350 ms of measured joint positions
 within 1 mrad before it exits, so a plan issued straight afterwards is not
-planning from a pose that is still moving. It exits non-zero and says why if the
-handoff or the settling fails. By hand it is still:
+planning from a pose that is still moving. The two ways that can fail are
+budgeted in the clock each one belongs to and reported separately: five seconds
+of simulated time for the arm to settle, which a slow simulation cannot
+exhaust, and a sixty second wall-clock watchdog, reset whenever ROS time
+advances, for a clock that has stopped. Either way it exits non-zero and says
+which happened. By hand it is still:
 
 ```bash
 rosrun controller_manager controller_manager stop sim_cartesian_velocity_controller_sim
