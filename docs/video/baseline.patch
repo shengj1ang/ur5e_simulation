@@ -1,0 +1,73 @@
+--- a/sim/sim_description/urdf/xacro/main.xacro
++++ b/sim/sim_description/urdf/xacro/main.xacro
+@@ -103,12 +103,16 @@
+         </surface>
+     </link>
+ 
++    <!-- VIDEO BASELINE ONLY: the gantry effort limits are raised to the
++         values the current model uses (2000/2000/2000/500), so that the
++         same base disturbance can be injected on both sides of the
++         comparison. Nothing about the arm control is changed. -->
+     <joint name="x_joint" type="prismatic">
+         <origin xyz="0 0 0.1" rpy="0 0 0"></origin>
+         <parent link="base_table" />
+         <child link="x_axle" />
+         <axis xyz="1 0 0" />
+-        <limit effort="30" velocity="100.0" lower="-5" upper="5" />
++        <limit effort="2000" velocity="100.0" lower="-5" upper="5" />
+     </joint>
+ 
+     <link name="y_axle">
+@@ -148,7 +152,7 @@
+         <parent link="x_axle" />
+         <child link="y_axle" />
+         <axis xyz="0 1 0" />
+-        <limit effort="30" velocity="100.0" lower="-5" upper="5" />
++        <limit effort="2000" velocity="100.0" lower="-5" upper="5" />
+     </joint>
+ 
+     <link name="z_axle">
+@@ -188,7 +192,7 @@
+         <parent link="y_axle" />
+         <child link="z_axle" />
+         <axis xyz="0 0 1" />
+-        <limit effort="30000000" velocity="100.0" lower="-0.5" upper="5.0" />
++        <limit effort="2000" velocity="100.0" lower="-0.5" upper="5.0" />
+     </joint>
+ 
+     <link name="plate">
+@@ -228,7 +232,7 @@
+         <parent link="z_axle" />
+         <child link="plate" />
+         <axis xyz="0 0 1" />
+-        <limit effort="30" velocity="100.0" lower="-6.28" upper="6.28" />
++        <limit effort="500" velocity="100.0" lower="-6.28" upper="6.28" />
+     </joint>
+ 
+     <joint name="associate_joint" type="fixed">
+--- a/sim/sim_bringup/launch/with_moveit_new.launch
++++ b/sim/sim_bringup/launch/with_moveit_new.launch
+@@ -3,8 +3,11 @@
+     <!-- these are the arguments you can pass this launch file, for example paused:=true -->
+     <arg name="paused" default="false"/>
+     <arg name="use_sim_time" value="true"/>
+-    <arg name="gui" value="true"/>
+-    <arg name="headless" value="false"/> <!-- Inert - see gazebo_ros_pkgs issue #491 -->
++    <arg name="gui" default="true"/>
++    <arg name="headless" default="false"/> <!-- Inert - see gazebo_ros_pkgs issue #491 -->
++    <!-- VIDEO BASELINE ONLY: lets the baseline run headless for recording,
++         the same way the current bringup can. Nothing else is changed. -->
++    <arg name="use_rviz" default="$(eval not arg('headless'))"/>
+     <arg name="recording" value="false"/>
+     <arg name="debug" value="false"/>
+ 
+@@ -43,6 +46,7 @@
+     <include file="$(find machine_tool_control)/launch/machine_tool_control4sim.launch"
+              if="$(arg use_machine_tool)"/>
+ 
+-    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find sim_description)/rviz/all.rviz" required="true" />
++    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find sim_description)/rviz/all.rviz"
++          required="true" if="$(arg use_rviz)" />
+ 
+ </launch>
+\ No newline at end of file
